@@ -19,7 +19,7 @@ void ps_free (void* ptr)
 
 START_TEST(test1)
 {
-    const char* const dir_name = "";
+    const char* const dir_name = "/tmp";
     ssize_t const bh_size = sizeof(gcache::BufferHeader);
     ssize_t const keep_size = 1;
     ssize_t const page_size = 2 + bh_size;
@@ -48,7 +48,7 @@ END_TEST
 
 START_TEST(test2)
 {
-    const char* const dir_name = "";
+    const char* const dir_name = "/tmp";
     ssize_t const bh_size = sizeof(gcache::BufferHeader);
     ssize_t const keep_size = 1;
     ssize_t page_size = (1 << 20) + bh_size;
@@ -75,7 +75,7 @@ END_TEST
 
 START_TEST(test3) // check that all page size is efficiently used
 {
-    const char* const dir_name = "";
+    const char* const dir_name = "/tmp";
     ssize_t const keep_size = 1;
     ssize_t const page_size = 1024;
 

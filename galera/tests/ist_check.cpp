@@ -250,7 +250,7 @@ static void test_ist_common(int const version)
     galera::ReplicatorSMM::InitConfig(conf, NULL);
     std::string gcache_file("ist_check.cache");
     conf.set("gcache.name", gcache_file);
-    std::string dir(".");
+    std::string dir("/tmp");
     std::string receiver_addr("tcp://127.0.0.1:0");
     wsrep_uuid_t uuid;
     gu_uuid_generate(reinterpret_cast<gu_uuid_t*>(&uuid), 0, 0);

@@ -27,7 +27,7 @@ START_TEST (basic)
     const char test1[] = "test1";
     ssize_t const test1_size(sizeof(test1) + extra_size);
 
-    TestBaseName test_name("gu_alloc_test");
+    TestBaseName test_name("/tmp/gu_alloc_test");
     gu::Allocator a(test_name, reserved, sizeof(reserved),
                     sizeof(test1), 1 << 16);
     mark_point();

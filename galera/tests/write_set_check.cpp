@@ -23,7 +23,7 @@ namespace
         TestEnv() :
             conf_   (),
             init_   (conf_, NULL),
-            gcache_ (conf_, "."),
+            gcache_ (conf_, "/tmp"),
             gcs_    (conf_, gcache_),
             thd_    (gcs_,  gcache_)
         {}

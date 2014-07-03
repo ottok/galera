@@ -12,7 +12,7 @@ using namespace gcache;
 
 START_TEST(test1)
 {
-    std::string const rb_name = "rb_test";
+    std::string const rb_name = "/tmp/rb_test";
     ssize_t const bh_size = sizeof(gcache::BufferHeader);
     ssize_t const rb_size (4 + 2*bh_size);
 
