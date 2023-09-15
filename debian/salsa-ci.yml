@@ -89,6 +89,13 @@ build armhf:
   # Complete upgrade of minimal stack
   - apt-get install -y apt
 
+# The official Stretch repository has been archived
+.test-enable-stretch-archive-repos: &test-enable-stretch-archive-repos |
+  cat > /etc/apt/sources.list <<EOF
+  deb http://archive.debian.org/debian stretch main
+  deb http://archive.debian.org/debian-security stretch/updates main
+  EOF
+
 .test-enable-artifacts-repo: &test-enable-artifacts-repo |
   apt-get install -y apt-utils
   apt-ftparchive packages .>Packages
@@ -207,6 +214,7 @@ galera-3 stretch to galera-4 upgrade:
     - job: build
   image: debian:stretch
   script:
+    - *test-enable-stretch-archive-repos
     - *test-prepare-container
     - apt-get install -y 'galera-*'
     - *test-enable-sid-repos
