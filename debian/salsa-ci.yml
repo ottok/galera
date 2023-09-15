@@ -44,6 +44,14 @@ build buster-backports:
   # Prime the apt cache so later apt commands can run
   apt-get update
 
+
+# # The official Stretch repository has been deprecated, so use last snapshot instead
+.test-enable-stretch-archive-repos: &test-enable-stretch-archive-repos |
+  cat > /etc/apt/sources.list <<EOF
+  deb http://archive.debian.org/debian stretch main
+  deb http://archive.debian.org/debian-security stretch/updates main
+  EOF
+
 # In addition to Salsa-CI, also run these fully Galera specific build jobs
 galera-4.x to galera-4.y upgrade:
   stage: upgrade in Bullseye
@@ -106,6 +114,7 @@ galera-3 stretch to galera-4 upgrade:
       artifacts: true
   image: debian:stretch
   script:
+    - *test-enable-stretch-archive-repos
     - *test-prepare-container
     # Install almost everything currently in Debian Buster
     - apt-get install -y 'galera-*'
