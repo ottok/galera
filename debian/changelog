@@ -1,4 +1,4 @@
-galera-4 (26.4.14-1~exp1) experimental; urgency=medium
+galera-4 (26.4.14-1) unstable; urgency=medium
 
   [ Otto Kekäläinen ]
   * New upstream release 26.4.14. Includes multiple bug fixes, see
@@ -7,7 +7,11 @@ galera-4 (26.4.14-1~exp1) experimental; urgency=medium
   [ Faustin Lammler ]
   * Running daemon under nobody user is not recommended (Closes: #970045)
 
- -- Otto Kekäläinen <otto@debian.org>  Sat, 15 Apr 2023 14:27:31 -0700
+  [ Daniel Black ]
+  * Salsa-CI: use stretch archive
+  * Reduce galera.cache size test for Salsa
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 16 Sep 2023 15:54:34 -0700
 
 galera-4 (26.4.13-1) unstable; urgency=medium
 
