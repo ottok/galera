@@ -1,5 +1,6 @@
 galera-4 (26.4.14-0+deb11u1) bullseye; urgency=medium
 
+  [ Otto Kekäläinen ]
   * New upstream release 26.4.14. Includes multiple bug fixes, see
     https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.14.txt
   * For previous release details see
@@ -11,7 +12,10 @@ galera-4 (26.4.14-0+deb11u1) bullseye; urgency=medium
       directory for garbd process, which helps to fix long standing
       issue from 2015 (https://github.com/codership/galera/issues/313).
 
- -- Otto Kekäläinen <otto@debian.org>  Sat, 15 Apr 2023 12:22:52 -0700
+  [ Daniel Black ]
+  * Reduce galera.cache size test for Salsa
+
+ -- Otto Kekäläinen <otto@debian.org>  Thu, 28 Sep 2023 14:27:45 -0700
 
 galera-4 (26.4.11-0+deb11u1) bullseye; urgency=medium
 
