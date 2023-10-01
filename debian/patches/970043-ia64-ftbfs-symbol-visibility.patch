@@ -1,0 +1,18 @@
+From: https://github.com/codership/galera/issues/648#issuecomment-2099065083
+Forwarded: no
+Author: Teemu Ollakka <teemu.ollakka@galeracluster.com>
+Subject: IA64 symbol visibility fix
+Description:
+ It seems that the symbol visibility on ia64 platform is a bit special. The
+ symbol visibility check should be fixed to take this into account.
+--- a/galera/src/CMakeLists.txt
++++ b/galera/src/CMakeLists.txt
+@@ -129,7 +129,7 @@ endif()
+ if (GALERA_VERSION_SCRIPT)
+   add_custom_command(TARGET galera_smm POST_BUILD
+     COMMAND
+-    sh -c "! ${CMAKE_OBJDUMP} -T libgalera_smm.so | grep asio"
++    sh -c "! ${CMAKE_OBJDUMP} -T libgalera_smm.so | grep asio | grep -v ' l '"
+     WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+     COMMENT "Checking library symbol visibility (hidden)"
+     VERBATIM)
