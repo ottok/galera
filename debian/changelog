@@ -1,9 +1,18 @@
-galera-4 (26.4.16-2) UNRELEASED; urgency=medium
+galera-4 (26.4.16-2) unstable; urgency=medium
 
-  * Open new changelog entry. This will automatically be replaced
-    by 'gbp dch -avR' before next release.
+  * Format patches from Daniel Black to use DEP-3 patch tagging guidelines
+  * Apply upstream patches from codership/galera#558, which includes
+    multiple Debian build and post-build test failure fixes:
+    - Attempt to bind to UDP and skips tests if not available
+      (Related: #1007954)
+    - Show libgalera_smm.so build output instead of sending it to /dev/null
+    - (Related: #970043)
+    - Generate keys and certificates for SSL tests (Closes: #1053334)
+    - Fix 'uuid == WSREP_UUID_UNDEFINED' (Related: #970044)
+    - Fix issues reported -Werror when compiling (Related: #970043)
+    - Fix UBSAN issues (Closes: #1053183, Related: #970042)
 
- -- Otto Kekäläinen <otto@debian.org>  Wed, 18 Oct 2023 18:43:24 -0700
+ -- Otto Kekäläinen <otto@debian.org>  Wed, 18 Oct 2023 18:51:18 -0700
 
 galera-4 (26.4.16-1) unstable; urgency=medium
 
