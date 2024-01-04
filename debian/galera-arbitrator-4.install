@@ -1,2 +1,4 @@
-garb/files/garb-systemd usr/bin
 usr/bin/garbd
+usr/share/garb-systemd
+usr/share/garb.cnf
+usr/share/garb.service
