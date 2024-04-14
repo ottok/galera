@@ -49,7 +49,10 @@ build armhf:
 #  variables:
 #    RELEASE: stretch-backports
 
+# In addition to Salsa-CI, also run these package specific build jobs
+
 # Define snippets used to construct jobs
+
 .test-prepare-container: &test-prepare-container |
   cd ${WORKING_DIR} # Don't repeat this step, it's just cd ./debian/output
   # Enable automatic restarts from maint scripts
@@ -58,8 +61,10 @@ build armhf:
   echo -e '#!/bin/sh\necho "N 5"' > /sbin/runlevel; chmod +x /sbin/runlevel
   # Avoid the warnings of "debconf: unable to initialize frontend: Dialog"
   echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+  # Emit non-zero exit code also on warnings
+  echo 'APT::Update::Error-Mode "any";' > /etc/apt/apt.conf.d/non-zero-exit-on-warnings
   # Prime the apt cache so later apt commands can run
-  apt-get update
+  apt-get update -qq
 
 .test-enable-bullseye-repos: &test-enable-bullseye-repos |
   # Replace any old repos with just Bullseye
@@ -73,21 +78,26 @@ build armhf:
   - echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
   # Upgrade minimal stack first
   - apt-get update -qq
-  # Next step will fail on https://bugs.debian.org/993755
+  # Complete upgrade of minimal stack
+  - apt-get install -qq --yes apt || export APT_STATUS="failed"
+  # Due to https://bugs.debian.org/993755 and #975077 upgrades from Buster or
+  # older to Bookworm or newer fails on:
   #   /usr/bin/perl: error while loading shared libraries: libcrypt.so.1: cannot
   #     open shared object file: No such file or directory
   #   dpkg: error processing package libc6:amd64 (--configure):
-  - apt-get install -y apt || true
-  # Apply workaround
-  - cd $(mktemp -d) # Use temp dir where apt can download and unpack files
-  - apt-get -y download libcrypt1
-  - dpkg-deb -x libcrypt1_*.deb .
-  - cp -ra lib/* /lib/
-  - cd - # Back to /builds/$USER/mariadb-server/debian/output
-  - find /lib/*/libcrypt.* -ls # Show that new libcrypt is there
-  - apt-get -y --fix-broken install
-  # Complete upgrade of minimal stack
-  - apt-get install -y apt
+  # Therefore, run this extra workaround if first run of apt-get install failed:
+  - |
+    if [ "$APT_STATUS" = "failed" ]
+    then
+      cd $(mktemp -d) # Use temp dir where apt can download and unpack files
+      apt-get -y download libcrypt1
+      dpkg-deb -x libcrypt1_*.deb .
+      cp -ra usr/lib/* /lib/ || true # libcrypt 1:4.4.36-3+
+      cd - # Back to /builds/$USER/mariadb-server/debian/output
+      find /lib/*/libcrypt.* -ls # Show that new libcrypt is there
+      apt-get -qq --yes --fix-broken install
+      apt-get install -qq --yes apt
+    fi
 
 # The official Stretch repository has been archived
 .test-enable-stretch-archive-repos: &test-enable-stretch-archive-repos |
