@@ -1,3 +1,10 @@
+galera-4 (26.4.18-1~exp1) experimental; urgency=medium
+
+  * Switch to upstream aware DEP-14 branch structure in gbp.conf
+  * New upstream signing key 3D53839A70BC938B08CDD47F45460A518DA84635
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 13 Apr 2024 17:43:20 -0700
+
 galera-4 (26.4.16-2) unstable; urgency=medium
 
   * Format patches from Daniel Black to use DEP-3 patch tagging guidelines
