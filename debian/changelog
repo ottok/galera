@@ -1,10 +1,15 @@
-galera-4 (26.4.18-1~exp1) experimental; urgency=medium
+galera-4 (26.4.18-1) unstable; urgency=medium
 
   * Switch to upstream aware DEP-14 branch structure in gbp.conf
-  * New upstream signing key 3D53839A70BC938B08CDD47F45460A518DA84635
+  * New upstream release 26.4.18. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.18.txt
+  * For previous release details see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.17.txt
+  * New upstream signing key 3D53839A70BC938B08CDD47F45460A518DA84635,
+    verified from 26.4.17 release notes
   * Move service file from /lib to /usr/lib to conform with usrmerge
 
- -- Otto Kekäläinen <otto@debian.org>  Sun, 14 Apr 2024 14:00:04 -0700
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 20 Apr 2024 16:21:37 -0700
 
 galera-4 (26.4.16-2) unstable; urgency=medium
 
