@@ -14,7 +14,7 @@
 #endif
 
 #include "wsrep_params.hpp"
-#include "event_service.hpp"
+#include "gu_event_service.hpp"
 #include "wsrep_config_service.h"
 
 #include <cassert>
@@ -977,14 +977,25 @@ wsrep_status_t galera_append_key(wsrep_t*           const gh,
 
     try
     {
+        int const proto_ver(repl->trx_proto_ver());
         TrxHandleLock lock(*trx);
-        for (size_t i(0); i < keys_num; ++i)
+
+        if (keys_num > 0)
         {
-            galera::KeyData k (repl->trx_proto_ver(),
-                               keys[i].key_parts,
-                               keys[i].key_parts_num,
-                               key_type,
-                               copy);
+            for (size_t i(0); i < keys_num; ++i)
+            {
+                galera::KeyData const k(proto_ver,
+                                        keys[i].key_parts,
+                                        keys[i].key_parts_num,
+                                        key_type,
+                                        copy);
+                gu_trace(trx->append_key(k));
+            }
+        }
+        else if (proto_ver >= 6)
+        {
+            /* Append server-level key (matches every trx)*/
+            galera::KeyData const k(proto_ver, key_type);
             gu_trace(trx->append_key(k));
         }
         retval = WSREP_OK;
@@ -1656,12 +1667,12 @@ extern "C" void wsrep_deinit_allowlist_service_v1()
 extern "C"
 int wsrep_init_event_service_v1(wsrep_event_service_v1_t *event_service)
 {
-    return galera::EventService::init_v1(event_service);
+    return gu::EventService::init_v1(event_service);
 }
 
 extern "C" void wsrep_deinit_event_service_v1()
 {
-    galera::EventService::deinit_v1();
+    gu::EventService::deinit_v1();
 }
 
 static int map_parameter_flags(int flags)
@@ -1676,6 +1687,8 @@ static int map_parameter_flags(int flags)
     if (flags & gu::Config::Flag::type_integer)
       ret |= WSREP_PARAM_TYPE_INTEGER;
     if (flags & gu::Config::Flag::type_double)
+      ret |= WSREP_PARAM_TYPE_DOUBLE;
+    if (flags & gu::Config::Flag::type_duration)
       ret |= WSREP_PARAM_TYPE_DOUBLE;
     return ret;
 }
@@ -1702,6 +1715,21 @@ static int wsrep_parameter_init(wsrep_parameter& wsrep_param,
     case gu::Config::Flag::type_double:
         ret = gu_str2dbl(param.value().c_str(), &wsrep_param.value.as_double);
         break;
+    case gu::Config::Flag::type_duration:
+    {
+        try
+        {
+            // durations are mapped to doubles
+            wsrep_param.value.as_double
+                = to_double(gu::datetime::Period(param.value()));
+        }
+        catch (...)
+        {
+            assert(0);
+            return 1;
+        }
+        break;
+    }
     default:
         assert((param.flags() & gu::Config::Flag::type_mask) == 0);
         wsrep_param.value.as_string = param.value().c_str();
@@ -1749,10 +1777,14 @@ extern "C"
 int wsrep_init_config_service_v1(wsrep_config_service_v1_t *config_service)
 {
     config_service->get_parameters = get_parameters;
+    // Deprecation checks will be done by application which uses
+    // the service.
+    gu::Config::disable_deprecation_check();
     return WSREP_OK;
 }
 
 extern "C"
 void wsrep_deinit_config_service_v1()
 {
+    gu::Config::enable_deprecation_check();
 }

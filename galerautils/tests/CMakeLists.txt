@@ -47,7 +47,6 @@ add_test(
 #
 # C++ galerautils tests.
 #
-
 add_executable(gu_tests++
   gu_atomic_test.cpp
   gu_gtid_test.cpp
@@ -58,6 +57,7 @@ add_executable(gu_tests++
   gu_mem_pool_test.cpp
   gu_alloc_test.cpp
   gu_rset_test.cpp
+  gu_utils_test++.cpp
   gu_string_utils_test.cpp
   gu_uri_test.cpp
   gu_config_test.cpp
@@ -74,7 +74,7 @@ add_executable(gu_tests++
 
 target_compile_definitions(gu_tests++
   PRIVATE
-  -DGU_ASIO_TEST_CERT_DIR="${PROJECT_SOURCE_DIR}/tests/conf")
+  -DGU_ASIO_TEST_CERT_DIR="${CMAKE_CURRENT_BINARY_DIR}/certs")
 
 # TODO: These should be eventually fixed.
 target_compile_options(gu_tests++
@@ -92,7 +92,6 @@ add_test(
   NAME gu_tests++
   COMMAND gu_tests++
   )
-
 #
 # Deqmap micro benchmark.
 #

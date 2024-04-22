@@ -826,6 +826,11 @@ start_progress(gcs_conn_t* conn)
 {
     gu_fifo_lock(conn->recv_q);
     {
+        if (conn->progress_)
+        {
+            // Did not reach synced after previously becoming joined.
+            delete conn->progress_;
+        }
         conn->progress_ = new gu::Progress<gcs_seqno_t>(
             conn->progress_cb_,
             "Processing event queue:", " events",
@@ -1390,7 +1395,7 @@ _close(gcs_conn_t* conn, bool join_recv_thread)
             assert (GCS_CONN_CLOSED == conn->state);
         }
 
-        gu_info ("Closing replication queue.");
+        gu_info ("Closing send queue.");
         struct gcs_repl_act** act_ptr;
         /* At this point (state == CLOSED) no new threads should be able to
          * queue for repl (check gcs_repl()), and recv thread is joined, so no
@@ -1413,7 +1418,7 @@ _close(gcs_conn_t* conn, bool join_recv_thread)
         /* wake all gcs_recv() threads () */
         // FIXME: this can block waiting for applicaiton threads to fetch all
         // items. In certain situations this can block forever. Ticket #113
-        gu_info ("Closing slave action queue.");
+        gu_info ("Closing receive queue.");
         gu_fifo_close (conn->recv_q);
     }
 
@@ -1703,6 +1708,11 @@ long gcs_close (gcs_conn_t *conn)
     }
     /* recv_thread() is supposed to set state to CLOSED when exiting */
     assert (GCS_CONN_CLOSED == conn->state);
+    if (conn->progress_)
+    {
+        delete conn->progress_;
+        conn->progress_ = nullptr;
+    }
     return ret;
 }
 
@@ -2211,9 +2221,25 @@ gcs_set_last_applied (gcs_conn_t* conn, const gu::GTID& gtid)
 
     long ret = gcs_sm_enter (conn->sm, &cond, false, false);
 
-    if (!ret) {
-        ret = gcs_core_set_last_applied (conn->core, gtid);
-        gcs_sm_leave (conn->sm);
+    if (ret)
+    {
+        log_info << "Unable to report last applied write-set to "
+                 << "cluster. Will try later. "
+                 << "(gcs_sm_enter(): " << -ret
+                 << " seqno: " << gtid.seqno() << ")";
+    }
+    else
+    {
+        log_debug << "Sending last applied seqno: " << gtid.seqno();
+        ret = gcs_core_set_last_applied(conn->core, gtid);
+        gcs_sm_leave(conn->sm);
+        if (ret < 0)
+        {
+            log_info << "Unable to report last applied write-set to "
+                     << "cluster. Will try later. "
+                     << "(gcs_core_set_last_applied(): " << -ret
+                     << " seqno: " << gtid.seqno() << ")";
+        }
     }
 
     gu_cond_destroy (&cond);

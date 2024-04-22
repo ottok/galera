@@ -303,7 +303,16 @@ namespace
 
         std::string get_password() const
         {
-            std::string   file(conf_.get(gu::conf::ssl_password_file));
+            std::string   file;
+            try {
+                file = conf_.get(gu::conf::ssl_password_file);
+            }
+            catch (const gu::NotSet&)
+            {
+                gu_throw_error(EINVAL)
+                << gu::conf::ssl_password_file << " is required";
+            }
+
             std::ifstream ifs(file.c_str(), std::ios_base::in);
 
             if (ifs.good() == false)
@@ -316,6 +325,7 @@ namespace
             std::getline(ifs, ret);
             return ret;
         }
+
     private:
         const gu::Config& conf_;
     };
@@ -525,7 +535,8 @@ void gu::ssl_register_params(gu::Config& conf)
              gu::Config::Flag::type_bool);
     conf.add(gu::conf::ssl_compression,
              gu::Config::Flag::read_only |
-             gu::Config::Flag::type_bool);
+             gu::Config::Flag::type_bool |
+             gu::Config::Flag::deprecated);
     conf.add(gu::conf::ssl_key,
              gu::Config::Flag::read_only);
     conf.add(gu::conf::ssl_cert,
@@ -589,14 +600,20 @@ void gu::ssl_init_options(gu::Config& conf)
         conf.set(conf::ssl_cipher, cipher_list);
 
         // compression
-        bool compression(conf.get(conf::ssl_compression, true));
-        if (compression == false)
+        try
         {
-            log_info << "disabling SSL compression";
-            sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
+            (void) conf.get(conf::ssl_compression);
+            // warn the user if socket.ssl_compression is set explicitly
+            log_warn << "SSL compression is not effective. The option "
+                     << conf::ssl_compression << " is deprecated and "
+                     << "will be removed in future releases.";
         }
-        conf.set(conf::ssl_compression, compression);
-
+        catch (NotSet&)
+        {
+            // this is a desirable situation
+        }
+        log_info << "not using SSL compression";
+        sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
 
         // verify that asio::ssl::context can be initialized with provided
         // values

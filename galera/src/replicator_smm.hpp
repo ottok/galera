@@ -411,6 +411,7 @@ namespace galera
         {
             if (gu_unlikely(purge_seqno != -1))
             {
+                assert(purge_seqno <= last_committed());
                 service_thd_.report_last_committed(purge_seqno);
             }
         }
@@ -465,8 +466,6 @@ namespace galera
                                          const TrxHandleSlavePtr&);
         wsrep_status_t cert_and_catch   (TrxHandleMaster*,
                                          const TrxHandleSlavePtr&);
-        wsrep_status_t cert_for_aborted (const TrxHandleSlavePtr&);
-
         // Enter apply monitor for local transaction. Return true
         // if apply monitor was grabbed.
         bool enter_apply_monitor_for_local(TrxHandleMaster&,
@@ -926,6 +925,7 @@ namespace galera
          * |                 9 | SS keys   4 |              2 |               2 |
          * | 4.x            10 | PA range/ 5 | CC events /  3 |               2 |
          * |                   | UPD keys    | idx preload    |                 |
+         * |                11 | SRV keys  6 |              3 |               2 |
          * |--------------------------------------------------------------------|
          *
          * Note: str_proto_ver is decided in replicator_str.cpp based on
