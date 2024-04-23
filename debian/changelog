@@ -1,3 +1,26 @@
+galera-4 (26.4.18-0+deb11u1) bullseye; urgency=medium
+
+  * Switch to upstream aware DEP-14 branch structure in gbp.conf
+  * New upstream release 26.4.18. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.18.txt
+  * For previous release details see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.17.txt
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.16.txt
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.15.txt
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.14.txt
+  * New upstream signing key 3D53839A70BC938B08CDD47F45460A518DA84635,
+    verified from 26.4.17 release notes
+  * New upstream release includes multiple Debian build and post-build test
+    failure fixes:
+    - Generate keys and certificates for SSL tests (Closes: #1053334)
+    - Attempt to bind to UDP and skips tests if not available
+      (Related: #1007954)
+    - Fix 'uuid == WSREP_UUID_UNDEFINED' (Related: #970044)
+    - Fix issues reported -Werror when compiling (Related: #970043)
+    - Fix UBSAN issues (Closes: #1053183, Related: #970042)
+
+ -- Otto Kekäläinen <otto@debian.org>  Mon, 22 Apr 2024 21:00:19 -0700
+
 galera-4 (26.4.14-0+deb11u1) bullseye; urgency=medium
 
   [ Otto Kekäläinen ]
