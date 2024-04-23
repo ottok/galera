@@ -1,12 +1,14 @@
-# Inlude Salsa-CI as a base
+---
+# Include Salsa-CI as a base
 include:
- - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
- - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
 
 variables:
   SALSA_CI_DISABLE_MISSING_BREAKS: 0
   SALSA_CI_DISABLE_RC_BUGS: 0
-  RELEASE: 'bullseye'
+  SALSA_CI_DISABLE_BLHC: 1
+  RELEASE: bullseye
   # Make Lintian image use Bullseye as it does not use ${RELEASE} since
   # https://salsa.debian.org/salsa-ci-team/pipeline/-/merge_requests/347 and
   # Lintian v2.115+ has syntax changes about brackets '[]' usage that are too
@@ -16,23 +18,13 @@ variables:
 stages:
   - provisioning
   - build
-  - test # Stage referenced by Salsa-CI template reprotest stanza, so must exist
-  - publish # Stage referenced by Salsa-CI template aptly stanza, so must exist even though not used
+  - test  # Stage referenced by Salsa-CI template reprotest stanza, so must exist
+  - publish  # Stage referenced by Salsa-CI template aptly stanza, so must exist even though not used
   - upgrade in Bullseye
   - upgrade from Buster/Stretch
 
-build buster-backports:
-  extends: .build-package
-  variables:
-    RELEASE: buster-backports
-
-# Since SCons changed to CMake >= 3.8, that build dependency can no longer be satisfied on Stretch
-#build stretch-backports:
-#  extends: .build-package
-#  variables:
-#    RELEASE: stretch-backports
-
 # Define snippets used to construct jobs
+
 .test-prepare-container: &test-prepare-container |
   cd ${WORKING_DIR} # Don't repeat this step, it's just cd ./debian/output
   # Enable automatic restarts from maint scripts
@@ -41,11 +33,13 @@ build buster-backports:
   echo -e '#!/bin/sh\necho "N 5"' > /sbin/runlevel; chmod +x /sbin/runlevel
   # Avoid the warnings of "debconf: unable to initialize frontend: Dialog"
   echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+  # Emit non-zero exit code also on warnings
+  echo 'APT::Update::Error-Mode "any";' > /etc/apt/apt.conf.d/non-zero-exit-on-warnings
   # Prime the apt cache so later apt commands can run
-  apt-get update
+  apt-get update -qq
 
 
-# # The official Stretch repository has been deprecated, so use last snapshot instead
+# The official Stretch repository has been archived
 .test-enable-stretch-archive-repos: &test-enable-stretch-archive-repos |
   cat > /etc/apt/sources.list <<EOF
   deb http://archive.debian.org/debian stretch main
@@ -58,7 +52,7 @@ galera-4.x to galera-4.y upgrade:
   needs:
     - job: build
       artifacts: true
-  image: debian:bullseye
+  image: debian:$RELEASE
   artifacts:
     when: always
     name: "$CI_BUILD_NAME"
@@ -84,7 +78,6 @@ galera-3 buster to galera-4 upgrade:
   stage: upgrade from Buster/Stretch
   needs:
     - job: build
-      artifacts: true
   image: debian:buster
   script:
     - *test-prepare-container
@@ -111,7 +104,6 @@ galera-3 stretch to galera-4 upgrade:
   stage: upgrade from Buster/Stretch
   needs:
     - job: build
-      artifacts: true
   image: debian:stretch
   script:
     - *test-enable-stretch-archive-repos
@@ -141,14 +133,13 @@ mariadb-10.3 buster dist-upgrade:
   stage: upgrade from Buster/Stretch
   needs:
     - job: build
-      artifacts: true
   image: debian:buster
   script:
     - *test-prepare-container
     # Install almost everything Galera currently in Debian Buster
     # and the MariaDB Server 10.3 which uses Galera
     - apt-get install -y 'galera-*' mariadb-server
-    - dpkg -l | grep -iE 'maria|mysql|galera' # List installed
+    - dpkg -l | grep -iE 'maria|mysql|galera'  # List installed
     # Verify MariaDB is running and Galera plugin is visible
     - mariadb -e "SHOW PLUGINS;" mysql | grep -i wsrep
     # Add newly built packages as repository
