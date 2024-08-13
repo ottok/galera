@@ -1,0 +1,9 @@
+---
+# Include Salsa-CI as a base
+include:
+  - https://salsa.debian.org/ahmedsiam/salsa-pipeline/-/raw/master/recipes/ubuntu.yml
+
+variables:
+  RELEASE: focal
+  SALSA_CI_DISABLE_BLHC: 1
+  SALSA_CI_DISABLE_REPROTEST: 1
