@@ -1,3 +1,9 @@
+galera-4 (26.4.9-1build1) jammy; urgency=medium
+
+  * No-change rebuild against openssl3
+
+ -- Simon Chopin <simon.chopin@canonical.com>  Tue, 23 Nov 2021 16:18:40 +0100
+
 galera-4 (26.4.9-1) unstable; urgency=medium
 
   [ Otto Kekäläinen ]
