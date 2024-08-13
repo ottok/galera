@@ -1,3 +1,27 @@
+galera-4 (26.4.16-2build4) noble; urgency=medium
+
+  * No-change rebuild against libssl3t64.
+
+ -- Colin Watson <cjwatson@ubuntu.com>  Mon, 15 Apr 2024 11:14:43 +0100
+
+galera-4 (26.4.16-2build3) noble; urgency=medium
+
+  * No-change rebuild for CVE-2024-3094
+
+ -- Steve Langasek <steve.langasek@ubuntu.com>  Sun, 31 Mar 2024 05:30:58 +0000
+
+galera-4 (26.4.16-2build2) noble; urgency=medium
+
+  * No-change rebuild against libssl3t64
+
+ -- Steve Langasek <steve.langasek@ubuntu.com>  Mon, 04 Mar 2024 17:56:42 +0000
+
+galera-4 (26.4.16-2build1) noble; urgency=medium
+
+  * No-change rebuild for boost defaults change.
+
+ -- Matthias Klose <doko@ubuntu.com>  Tue, 19 Dec 2023 15:49:51 +0100
+
 galera-4 (26.4.16-2) unstable; urgency=medium
 
   * Format patches from Daniel Black to use DEP-3 patch tagging guidelines
