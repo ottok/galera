@@ -1,3 +1,4 @@
 Tests: smoke
-Depends: galera-arbitrator-4
+Depends:
+ galera-arbitrator-4,
 Restrictions: allow-stderr superficial
