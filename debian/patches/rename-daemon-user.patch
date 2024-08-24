@@ -1,18 +1,30 @@
-Description:
- Running daemon under nobody user is not recommended.
- See: https://github.com/systemd/systemd/blob/v246/NEWS#L106-L113
+From: Faustin Lammler <faustin@fala.red>
+Date: Mon, 16 Jan 2023 16:09:15 +0100
+Subject: Running daemon under nobody user is not recommended.
+
 Forwarded: https://github.com/codership/galera/pull/633
+
+ See: https://github.com/systemd/systemd/blob/v246/NEWS#L106-L113
+---
+ garb/files/garb.service | 2 +-
+ garb/files/garb.sh      | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/garb/files/garb.service b/garb/files/garb.service
+index 926cf57..afe379c 100644
 --- a/garb/files/garb.service
 +++ b/garb/files/garb.service
 @@ -11,7 +11,7 @@ WantedBy=multi-user.target
  Alias=garbd.service
- 
+
  [Service]
 -User=nobody
 +User=_galera
  ExecStart=/usr/bin/garb-systemd start
- 
+
  # Use SIGINT because with the default SIGTERM
+diff --git a/garb/files/garb.sh b/garb/files/garb.sh
+index ad75cda..3d0de3f 100755
 --- a/garb/files/garb.sh
 +++ b/garb/files/garb.sh
 @@ -49,7 +49,7 @@ program_start() {

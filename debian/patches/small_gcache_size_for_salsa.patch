@@ -1,8 +1,15 @@
-From: https://salsa.debian.org/mariadb-team/galera-4/-/merge_requests/13
-Forwarded: https://github.com/codership/galera/pull/588
+From: Daniel Black <daniel@mariadb.org>
 Date: Fri, 15 Sep 2023 12:30:58 +1000
-Author: Daniel Black <daniel@mariadb.org>
 Subject: Reduce galera.cache size test for Salsa
+
+Origin: https://salsa.debian.org/mariadb-team/galera-4/-/merge_requests/13
+Forwarded: https://github.com/codership/galera/pull/588
+---
+ galera/tests/defaults_check.cpp | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/galera/tests/defaults_check.cpp b/galera/tests/defaults_check.cpp
+index 40edfab..73d8c1a 100644
 --- a/galera/tests/defaults_check.cpp
 +++ b/galera/tests/defaults_check.cpp
 @@ -60,9 +60,9 @@ static const char* Defaults[] =
