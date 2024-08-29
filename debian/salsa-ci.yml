@@ -3,6 +3,10 @@
 include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/recipes/debian.yml
 
+default:
+  tags:
+    - test
+
 # Override Salsa CI defaults with Galera specific variations
 variables:
   BUILT_PACKAGES: "galera-4 galera-arbitrator-4"
