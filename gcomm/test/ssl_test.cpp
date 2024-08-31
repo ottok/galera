@@ -6,6 +6,7 @@
 
 #include <map>
 #include <stdexcept>
+#include <iostream> // std::cerr
 
 static gu::Config conf;
 
@@ -87,7 +88,6 @@ public:
 
     ~Server()
     {
-        delete listener_;
         pnet_.erase(&pstack_);
         pstack_.pop_proto(this);
     }
@@ -123,7 +123,7 @@ public:
             gcomm::Datagram msg;
             msg.payload().resize(msg_.size());
             std::copy(msg_.begin(), msg_.end(), msg.payload().begin());
-            socket->send(msg);
+            socket->send(0, msg);
         }
         else if (socket->state() == gcomm::Socket::S_CLOSED ||
                  socket->state() == gcomm::Socket::S_FAILED)
@@ -144,7 +144,7 @@ private:
     gu::URI                           uri_;
     gcomm::Protonet&                  pnet_;
     gcomm::Protostack                 pstack_;
-    gcomm::Acceptor*                  listener_;
+    std::shared_ptr<gcomm::Acceptor>  listener_;
     std::map<const void*, gcomm::SocketPtr> smap_;
     const std::string                 msg_;
 };
@@ -163,7 +163,7 @@ int main(int argc, char* argv[])
     gu::Config conf;
     gcomm::Conf::register_params(conf);
     conf.parse(argv[2]);
-    std::auto_ptr<gcomm::Protonet> pnet(gcomm::Protonet::create(conf));
+    std::unique_ptr<gcomm::Protonet> pnet(gcomm::Protonet::create(conf));
 
     if (std::string("-s") == argv[1])
     {

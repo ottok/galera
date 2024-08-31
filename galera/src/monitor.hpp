@@ -50,7 +50,6 @@ namespace galera
 
         static const ssize_t process_size_ = (1ULL << 16);
         static const size_t  process_mask_ = process_size_ - 1;
-
     public:
 
         Monitor()
@@ -65,7 +64,8 @@ namespace galera
             entered_(0),
             oooe_(0),
             oool_(0),
-            win_size_(0)
+            win_size_(0),
+            waits_(0)
         { }
 
         ~Monitor()
@@ -95,8 +95,14 @@ namespace galera
             gu::Lock lock(mutex_);
 
             state_debug_print("set_initial_position", seqno);
-
             uuid_ = uuid;
+            // When the monitor position is reset, either all the
+            // waiters must have been drained or the thread which is
+            // resetting the position must hold the monitor (CC from IST).
+            // Exception is -1 which means that the monitor is being
+            // forcifully reset.
+            assert(seqno == -1 || last_entered_ == last_left_ ||
+                   last_entered_ == seqno);
             if (last_entered_ == -1 || seqno == -1)
             {
                 // first call or reset
@@ -153,6 +159,7 @@ namespace galera
                 while (may_enter(obj) == false &&
                        process_[idx].state_ == Process::S_WAITING)
                 {
+                    ++waits_;
                     lock.wait(process_[idx].cond_);
                 }
 
@@ -356,7 +363,8 @@ namespace galera
             }
         }
 
-        void get_stats(double* oooe, double* oool, double* win_size) const
+        void get_stats(double* oooe, double* oool, double* win_size,
+                       long long* waits) const
         {
             gu::Lock lock(mutex_);
 
@@ -370,12 +378,13 @@ namespace galera
             {
                 *oooe = .0; *oool = .0; *win_size = .0;
             }
+            *waits = waits_;
         }
 
         void flush_stats()
         {
             gu::Lock lock(mutex_);
-            oooe_ = 0; oool_ = 0; win_size_ = 0; entered_ = 0;
+            oooe_ = 0; oool_ = 0; win_size_ = 0; entered_ = 0; waits_ = 0;
         }
 
     private:
@@ -542,6 +551,9 @@ namespace galera
         long oooe_;     // out of order entered
         long oool_;     // out of order left
         long win_size_; // window between last_left_ and last_entered_
+        // Total number of waits in the monitor. Incremented before
+        // entering into waiting state.
+        long long waits_;
     };
 }
 

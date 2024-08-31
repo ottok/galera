@@ -1,22 +1,478 @@
 //
-// Copyright (C) 2014-2015 Codership Oy <info@codership.com>
+// Copyright (C) 2014-2020 Codership Oy <info@codership.com>
 //
 
 #include "gu_config.hpp"
 #include "gu_asio.hpp"
+#include "gu_datetime.hpp"
+
+#ifdef ASIO_HPP
+#error "asio.hpp is already included before gu_asio.hpp, can't customize asio.hpp"
+#endif // ASIO_HPP
+
+#include "asio/version.hpp"
+
+// ASIO does not interact well with kqueue before ASIO 1.10.5, see
+// https://readlist.com/lists/freebsd.org/freebsd-current/23/119264.html
+// http://think-async.com/Asio/asio-1.10.6/doc/asio/history.html#asio.history.asio_1_10_5
+#if ASIO_VERSION < 101005
+# define ASIO_DISABLE_KQUEUE
+#endif // ASIO_VERSION < 101005
+
+#define GU_ASIO_IMPL
+#include "gu_asio_datagram.hpp"
+#include "gu_asio_debug.hpp"
+#include "gu_asio_error_category.hpp"
+#include "gu_asio_io_service_impl.hpp"
+#include "gu_asio_ip_address_impl.hpp"
+#include "gu_asio_stream_react.hpp"
+#include "gu_asio_utils.hpp"
+#include "gu_signals.hpp"
+
+#ifndef ASIO_HAS_BOOST_BIND
+#define ASIO_HAS_BOOST_BIND
+#endif // ASIO_HAS_BOOST_BIND
+#include "asio/placeholders.hpp"
+
+#ifdef GALERA_HAVE_SSL
+#include "asio/ssl.hpp"
+#endif // GALERA_HAVE_SSL
+
+#if (__GNUC__ == 4 && __GNUC_MINOR__ == 4)
+#include "asio/deadline_timer.hpp"
+#else
+#include "asio/steady_timer.hpp"
+#endif // #if (__GNUC__ == 4 && __GNUC_MINOR__ == 4)
 
 #include <boost/bind.hpp>
 
-void gu::ssl_register_params(gu::Config& conf)
+#include <fstream>
+#include <mutex>
+
+static wsrep_allowlist_service_v1_t* gu_allowlist_service(0);
+
+//
+// AsioIpAddress wrapper
+//
+
+//
+// IPv4
+//
+
+gu::AsioIpAddressV4::AsioIpAddressV4()
+    : impl_(std::unique_ptr<Impl>(new Impl))
+{ }
+
+gu::AsioIpAddressV4::AsioIpAddressV4(const AsioIpAddressV4& other)
+    : impl_(std::unique_ptr<Impl>(new Impl(*other.impl_)))
+{ }
+
+gu::AsioIpAddressV4& gu::AsioIpAddressV4::operator=(AsioIpAddressV4 other)
 {
-    // register SSL config parameters
-    conf.add(gu::conf::use_ssl);
-    conf.add(gu::conf::ssl_cipher);
-    conf.add(gu::conf::ssl_compression);
-    conf.add(gu::conf::ssl_key);
-    conf.add(gu::conf::ssl_cert);
-    conf.add(gu::conf::ssl_ca);
-    conf.add(gu::conf::ssl_password_file);
+    std::swap(this->impl_, other.impl_);
+    return *this;
+}
+
+gu::AsioIpAddressV4::~AsioIpAddressV4()
+{ }
+
+bool gu::AsioIpAddressV4::is_multicast() const
+{
+    return impl_->native().is_multicast();
+}
+
+gu::AsioIpAddressV4::Impl& gu::AsioIpAddressV4::impl()
+{
+    return *impl_;
+}
+
+const gu::AsioIpAddressV4::Impl& gu::AsioIpAddressV4::impl() const
+{
+    return *impl_;
+}
+
+//
+// IPv6
+//
+
+gu::AsioIpAddressV6::AsioIpAddressV6()
+    : impl_(std::unique_ptr<Impl>(new Impl))
+{ }
+
+gu::AsioIpAddressV6::AsioIpAddressV6(const AsioIpAddressV6& other)
+    : impl_(std::unique_ptr<Impl>(new Impl(*other.impl_)))
+{ }
+
+gu::AsioIpAddressV6& gu::AsioIpAddressV6::operator=(AsioIpAddressV6 other)
+{
+    std::swap(this->impl_, other.impl_);
+    return *this;
+}
+
+gu::AsioIpAddressV6::~AsioIpAddressV6()
+{ }
+
+
+bool gu::AsioIpAddressV6::is_link_local() const
+{
+    return impl_->native().is_link_local();
+}
+
+unsigned long gu::AsioIpAddressV6::scope_id() const
+{
+    return impl_->native().scope_id();
+}
+
+bool gu::AsioIpAddressV6::is_multicast() const
+{
+    return impl_->native().is_multicast();
+}
+
+gu::AsioIpAddressV6::Impl& gu::AsioIpAddressV6::impl()
+{
+    return *impl_;
+}
+
+const gu::AsioIpAddressV6::Impl& gu::AsioIpAddressV6::impl() const
+{
+    return *impl_;
+}
+
+//
+// Generic Ip address wrapper
+//
+
+gu::AsioIpAddress::AsioIpAddress()
+    : impl_(std::unique_ptr<Impl>(new Impl))
+{ }
+
+gu::AsioIpAddress::AsioIpAddress(const AsioIpAddress& other)
+    : impl_(std::unique_ptr<Impl>(new Impl(*other.impl_)))
+{ }
+
+gu::AsioIpAddress& gu::AsioIpAddress::operator=(AsioIpAddress other)
+{
+    std::swap(this->impl_, other.impl_);
+    return *this;
+}
+
+gu::AsioIpAddress::~AsioIpAddress()
+{ }
+
+
+gu::AsioIpAddress::Impl& gu::AsioIpAddress::impl()
+{
+    return *impl_;
+}
+
+const gu::AsioIpAddress::Impl& gu::AsioIpAddress::impl() const
+{
+    return *impl_;
+}
+
+
+bool gu::AsioIpAddress::is_v4() const
+{
+    return impl_->native().is_v4();
+}
+
+bool gu::AsioIpAddress::is_v6() const
+{
+    return impl_->native().is_v6();
+}
+
+gu::AsioIpAddressV4 gu::AsioIpAddress::to_v4() const
+{
+    gu::AsioIpAddressV4 ret;
+    ret.impl().native() = impl_->native().to_v4();
+    return ret;
+}
+
+gu::AsioIpAddressV6 gu::AsioIpAddress::to_v6() const
+{
+    gu::AsioIpAddressV6 ret;
+    ret.impl().native() = impl_->native().to_v6();
+    return ret;
+}
+
+//
+// Asio Error Code
+//
+
+gu::AsioErrorCategory gu_asio_system_category(asio::error::get_system_category());
+gu::AsioErrorCategory gu_asio_misc_category(asio::error::get_misc_category());
+#ifdef GALERA_HAVE_SSL
+gu::AsioErrorCategory gu_asio_ssl_category(asio::error::get_ssl_category());
+#endif // GALERA_HAVE_SSL
+
+gu::AsioErrorCode::AsioErrorCode()
+    : value_()
+    , category_(&gu_asio_system_category)
+    , error_extra_()
+{ }
+
+gu::AsioErrorCode::AsioErrorCode(int err)
+    : value_(err)
+    , category_(&gu_asio_system_category)
+    , error_extra_()
+{ }
+
+std::string gu::AsioErrorCode::message() const
+{
+    if (category_)
+    {
+        std::string ret(
+            asio::error_code(value_, category_->native()).message());
+#ifdef GALERA_HAVE_SSL
+        if (*category_ == gu_asio_ssl_category && error_extra_)
+        {
+            ret += std::string(": ")
+                + X509_verify_cert_error_string(error_extra_);
+        }
+#endif // GALERA_HAVE_SSL
+        return ret;
+    }
+    else
+    {
+        std::ostringstream oss;
+        oss << ::strerror(value_);
+        return oss.str();
+    }
+}
+
+std::ostream& gu::operator<<(std::ostream& os, const gu::AsioErrorCode& ec)
+{
+    return (os << ec.message());
+}
+
+gu::AsioErrorCode gu::AsioErrorCode::make_eof()
+{
+  return {asio::error::misc_errors::eof, gu_asio_misc_category};
+}
+
+bool gu::AsioErrorCode::is_eof() const
+{
+    return (category_ &&
+            *category_ == gu_asio_misc_category &&
+            value_ == asio::error::misc_errors::eof);
+}
+
+bool gu::AsioErrorCode::is_system() const
+{
+    return (not category_ ||
+            (category_ &&
+             *category_ == gu_asio_system_category));
+}
+
+//
+// Utility methods
+//
+
+
+std::string gu::any_addr(const gu::AsioIpAddress& addr)
+{
+    return ::any_addr(addr.impl().native());
+}
+
+std::string gu::unescape_addr(const std::string& addr)
+{
+    std::string ret(addr);
+    size_t pos(ret.find('['));
+    if (pos != std::string::npos) ret.erase(pos, 1);
+    pos = ret.find(']');
+    if (pos != std::string::npos) ret.erase(pos, 1);
+    return ret;
+}
+
+gu::AsioIpAddress gu::make_address(const std::string& addr)
+{
+    gu::AsioIpAddress ret;
+    ret.impl().native() = ::make_address(addr);
+    return ret;
+}
+
+//
+// SSL/TLS
+//
+//
+
+#ifdef GALERA_HAVE_SSL
+
+namespace
+{
+    // Callback for reading SSL key protection password from file
+    class SSLPasswordCallback
+    {
+    public:
+        SSLPasswordCallback(const gu::Config& conf) : conf_(conf) { }
+
+        std::string get_password() const
+        {
+            std::string   file;
+            try {
+                file = conf_.get(gu::conf::ssl_password_file);
+            }
+            catch (const gu::NotSet&)
+            {
+                gu_throw_error(EINVAL)
+                << gu::conf::ssl_password_file << " is required";
+            }
+
+            std::ifstream ifs(file.c_str(), std::ios_base::in);
+
+            if (ifs.good() == false)
+            {
+                gu_throw_system_error(errno) <<
+                    "could not open password file '" << file << "'";
+            }
+
+            std::string ret;
+            std::getline(ifs, ret);
+            return ret;
+        }
+
+    private:
+        const gu::Config& conf_;
+    };
+}
+
+static void throw_last_SSL_error(const std::string& msg)
+{
+    unsigned long const err(ERR_peek_last_error());
+    char errstr[120] = {0, };
+    ERR_error_string_n(err, errstr, sizeof(errstr));
+    gu_throw_error(EINVAL) << msg << ": "
+                           << err << ": '" << errstr << "'";
+}
+
+// Exclude some errors which are generated by the SSL library.
+bool exclude_ssl_error(const asio::error_code& ec)
+{
+    switch (ERR_GET_REASON(ec.value()))
+    {
+        // Short read errors seem to be generated quite frequently
+        // by SSL library because of broken connections. For Galera
+        // connections premature EOFs are not a problem because messages
+        // are framed and the protocols are fault tolerant by design.
+        // The error to suppress are:
+        // SSL_R_SHORT_READ - OpenSSL < 3.0
+        // SSL_R_UNEXPECTED_EOF_WHILE_READING - OpenSSL >= 3.0
+#ifdef SSL_R_SHORT_READ
+    case SSL_R_SHORT_READ:
+        return true;
+#endif /* SSL_R_SHORT_READ */
+#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
+    case SSL_R_UNEXPECTED_EOF_WHILE_READING:
+        // OpenSSL 3.0 and onwards.
+        return true;
+#endif /* SSL_R_UNEXPECTED_EOF_WHILE_READING */
+    default:
+        return false;
+    }
+}
+
+// Return low level error info for asio::error_code if available.
+std::string extra_error_info(const asio::error_code& ec)
+{
+    std::ostringstream os;
+    if (ec.category() == asio::error::get_ssl_category())
+    {
+        char errstr[120] = {0, };
+        ERR_error_string_n(ec.value(), errstr, sizeof(errstr));
+        os << ec.value() << ": '" << errstr << "'";
+    }
+    return os.str();
+}
+
+std::string gu::extra_error_info(const gu::AsioErrorCode& ec)
+{
+    if (ec.category())
+        return ::extra_error_info(asio::error_code(ec.value(),
+                                                   ec.category()->native()));
+    else
+        return "";
+}
+
+static SSL_CTX* native_ssl_ctx(asio::ssl::context& context)
+{
+#if ASIO_VERSION < 101401
+    return context.impl();
+#else
+    return context.native_handle();
+#endif
+}
+
+static void ssl_prepare_context(const gu::Config& conf, asio::ssl::context& ctx,
+                                bool verify_peer_cert = true)
+{
+    ctx.set_verify_mode(asio::ssl::context::verify_peer |
+                        (verify_peer_cert == true ?
+                         asio::ssl::context::verify_fail_if_no_peer_cert : 0));
+    SSLPasswordCallback cb(conf);
+    ctx.set_password_callback(
+        boost::bind(&SSLPasswordCallback::get_password, &cb));
+
+    std::string param;
+
+    try
+    {
+        // In some older OpenSSL versions ECDH engines must be enabled
+        // explicitly. Here we use SSL_CTX_set_ecdh_auto() or
+        // SSL_CTX_set_tmp_ecdh() if present.
+#if defined(OPENSSL_HAS_SET_ECDH_AUTO)
+        if (!SSL_CTX_set_ecdh_auto(native_ssl_ctx(ctx), 1))
+        {
+            throw_last_SSL_error("SSL_CTX_set_ecdh_auto() failed");
+        }
+#elif defined(OPENSSL_HAS_SET_TMP_ECDH)
+        {
+            EC_KEY* const ecdh(EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
+            if (ecdh == NULL)
+            {
+                throw_last_SSL_error("EC_KEY_new_by_curve_name() failed");
+            }
+            if (!SSL_CTX_set_tmp_ecdh(native_ssl_ctx(ctx),ecdh))
+            {
+                throw_last_SSL_error("SSL_CTX_set_tmp_ecdh() failed");
+            }
+            EC_KEY_free(ecdh);
+        }
+#endif /* OPENSSL_HAS_SET_ECDH_AUTO | OPENSSL_HAS_SET_TMP_ECDH */
+        param = gu::conf::ssl_cert;
+        ctx.use_certificate_chain_file(conf.get(param));
+        param = gu::conf::ssl_key;
+        ctx.use_private_key_file(conf.get(param), asio::ssl::context::pem);
+        param = gu::conf::ssl_ca;
+        ctx.load_verify_file(conf.get(param, conf.get(gu::conf::ssl_cert)));
+        param = gu::conf::ssl_cipher;
+        std::string const value(conf.get(param));
+        if (!value.empty())
+        {
+            if (!SSL_CTX_set_cipher_list(native_ssl_ctx(ctx), value.c_str()))
+            {
+                throw_last_SSL_error("Error setting SSL cipher list to '"
+                                      + value + "'");
+            }
+            else
+            {
+                log_info << "SSL cipher list set to '" << value << '\'';
+            }
+        }
+        ctx.set_options(asio::ssl::context::no_sslv2 |
+                        asio::ssl::context::no_sslv3 |
+                        asio::ssl::context::no_tlsv1);
+    }
+    catch (asio::system_error& ec)
+    {
+        gu_throw_error(EINVAL) << "Bad value '" << conf.get(param, "")
+                               << "' for SSL parameter '" << param
+                               << "': " << ::extra_error_info(ec.code());
+    }
+    catch (gu::NotSet& ec)
+    {
+        gu_throw_error(EINVAL) << "Missing required value for SSL parameter '"
+                               << param << "'";
+    }
 }
 
 /* checks if all mandatory SSL options are set */
@@ -55,150 +511,407 @@ static bool ssl_check_conf(const gu::Config& conf)
     return use_ssl;
 }
 
+static void init_use_ssl(gu::Config& conf)
+{
+    // use ssl if either private key or cert file is specified
+    bool use_ssl(conf.is_set(gu::conf::ssl_key)  == true ||
+                 conf.is_set(gu::conf::ssl_cert) == true);
+    try
+    {
+        // overrides use_ssl if set explicitly
+        use_ssl = conf.get<bool>(gu::conf::use_ssl);
+    }
+    catch (gu::NotSet& nf) {}
+
+    if (use_ssl == true)
+    {
+        conf.set(gu::conf::use_ssl, true);
+    }
+}
+
+void gu::ssl_register_params(gu::Config& conf)
+{
+    // register SSL config parameters
+    conf.add(gu::conf::use_ssl,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::ssl_cipher,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::ssl_compression,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool |
+             gu::Config::Flag::deprecated);
+    conf.add(gu::conf::ssl_key,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_cert,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_ca,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_password_file,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_reload,
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::socket_dynamic,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
+}
+
+void gu::ssl_param_set(const std::string& key, const std::string& val, 
+                       gu::Config& conf)
+{
+    if (key == gu::conf::ssl_reload)
+    {
+        if (conf.has(conf::use_ssl) && conf.get<bool>(conf::use_ssl, false))
+        {
+            try
+            {
+#if ASIO_VERSION < 101401
+                asio::io_service io_service;
+                asio::ssl::context ctx(io_service, asio::ssl::context::sslv23);
+#else
+                asio::ssl::context ctx(asio::ssl::context::sslv23);
+#endif
+                ssl_prepare_context(conf, ctx);
+                // Send signal
+                gu::Signals::Instance().signal(gu::Signals::S_CONFIG_RELOAD_CERTIFICATE);
+            }
+            catch (asio::system_error& ec)
+            {
+                gu_throw_error(EINVAL) << "Initializing SSL context failed: "
+                                       << ::extra_error_info(ec.code());
+            }
+        }
+    }
+    else
+    {
+        throw gu::NotFound();
+    }
+}
+
 void gu::ssl_init_options(gu::Config& conf)
 {
+    init_use_ssl(conf);
+
     bool use_ssl(ssl_check_conf(conf));
 
     if (use_ssl == true)
     {
         // set defaults
+        conf.set(conf::ssl_reload, 1);
 
         // cipher list
         const std::string cipher_list(conf.get(conf::ssl_cipher, ""));
         conf.set(conf::ssl_cipher, cipher_list);
 
         // compression
-        bool compression(conf.get(conf::ssl_compression, true));
-        if (compression == false)
+        try
         {
-            log_info << "disabling SSL compression";
-            sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
+            (void) conf.get(conf::ssl_compression);
+            // warn the user if socket.ssl_compression is set explicitly
+            log_warn << "SSL compression is not effective. The option "
+                     << conf::ssl_compression << " is deprecated and "
+                     << "will be removed in future releases.";
         }
-        conf.set(conf::ssl_compression, compression);
-
+        catch (NotSet&)
+        {
+            // this is a desirable situation
+        }
+        log_info << "not using SSL compression";
+        sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
 
         // verify that asio::ssl::context can be initialized with provided
         // values
         try
         {
+#if ASIO_VERSION < 101401
             asio::io_service io_service;
             asio::ssl::context ctx(io_service, asio::ssl::context::sslv23);
+#else
+            asio::ssl::context ctx(asio::ssl::context::sslv23);
+#endif
             ssl_prepare_context(conf, ctx);
         }
         catch (asio::system_error& ec)
         {
             gu_throw_error(EINVAL) << "Initializing SSL context failed: "
-                                   << extra_error_info(ec.code());
+                                   << ::extra_error_info(ec.code());
         }
     }
 }
 
-namespace
+#endif // GALERA_HAVE_SSL
+
+bool gu::is_verbose_error(const gu::AsioErrorCode& ec)
 {
-    // Callback for reading SSL key protection password from file
-    class SSLPasswordCallback
+    // Suppress system error which occur frequently during configuration
+    // changes and are not likely caused by programming errors.
+    if (ec.is_system())
     {
-    public:
-        SSLPasswordCallback(const gu::Config& conf) : conf_(conf) { }
-
-        std::string get_password() const
+        switch (ec.value())
         {
-            std::string   file(conf_.get(gu::conf::ssl_password_file));
-            std::ifstream ifs(file.c_str(), std::ios_base::in);
-
-            if (ifs.good() == false)
-            {
-                gu_throw_error(errno) <<
-                    "could not open password file '" << file << "'";
-            }
-
-            std::string ret;
-            std::getline(ifs, ret);
-            return ret;
+        case ECANCELED:  // Socket close
+        case EPIPE:      // Writing while remote end closed connection
+        case ECONNRESET: // Remote end closed connection
+        case EBADF:      // Socket closed before completion/read handler exec
+            return true;
+        default:
+            return false;
         }
-    private:
-        const gu::Config& conf_;
-    };
+    }
+    // EOF errors happen all the time when cluster configuration changes.
+    if (ec.is_eof())
+        return true;
+#ifdef GALERA_HAVE_SSL
+    // Suppress certain SSL errors.
+    return (not ec.category() ||
+            *ec.category() != gu_asio_ssl_category ||
+            exclude_ssl_error(asio::error_code(
+                                  ec.value(), ec.category()->native())));
+#else
+    return false;
+#endif // GALERA_HAVE_SSL
 }
 
-static void throw_last_SSL_error(const std::string& msg)
+//
+// IO Service wrapper
+//
+
+gu::AsioIoService::AsioIoService(const gu::Config& conf)
+    : impl_(std::unique_ptr<Impl>(new Impl))
+    , conf_(conf)
+    , signal_connection_()
+    , dynamic_socket_(false)
 {
-    unsigned long const err(ERR_peek_last_error());
-    char errstr[120] = {0, };
-    ERR_error_string_n(err, errstr, sizeof(errstr));
-    gu_throw_error(EINVAL) << msg << ": "
-                           << err << ": '" << errstr << "'";
+    signal_connection_ = gu::Signals::Instance().connect(
+        gu::Signals::slot_type(&gu::AsioIoService::handle_signal, 
+                               this, _1));
+    if (conf.has(gu::conf::socket_dynamic))
+    {
+        dynamic_socket_ = conf.get<bool>(gu::conf::socket_dynamic, false);
+    }
+#ifdef GALERA_HAVE_SSL
+    load_crypto_context();
+#endif // GALERA_HAVE_SSL
 }
 
-void gu::ssl_prepare_context(const gu::Config& conf, asio::ssl::context& ctx,
-                             bool verify_peer_cert)
+gu::AsioIoService::~AsioIoService()
 {
-    ctx.set_verify_mode(asio::ssl::context::verify_peer |
-                        (verify_peer_cert == true ?
-                         asio::ssl::context::verify_fail_if_no_peer_cert : 0));
-    SSLPasswordCallback cb(conf);
-    ctx.set_password_callback(
-        boost::bind(&SSLPasswordCallback::get_password, &cb));
+    signal_connection_.disconnect();
+};
 
-    std::string param;
-
-    try
+void gu::AsioIoService::handle_signal(const gu::Signals::SignalType& type)
+{
+    switch(type)
     {
-        // In some older OpenSSL versions ECDH engines must be enabled
-        // explicitly. Here we use SSL_CTX_set_ecdh_auto() or
-        // SSL_CTX_set_tmp_ecdh() if present.
-#if defined(OPENSSL_HAS_SET_ECDH_AUTO)
-        if (!SSL_CTX_set_ecdh_auto(ctx.impl(), 1))
-        {
-            throw_last_SSL_error("SSL_CTX_set_ecdh_auto() failed");
-        }
-#elif defined(OPENSSL_HAS_SET_TMP_ECDH)
-        {
-            EC_KEY* const ecdh(EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
-            if (ecdh == NULL)
-            {
-                throw_last_SSL_error("EC_KEY_new_by_curve_name() failed");
-            }
-            if (!SSL_CTX_set_tmp_ecdh(ctx.impl(),ecdh))
-            {
-                throw_last_SSL_error("SSL_CTX_set_tmp_ecdh() failed");
-            }
-            EC_KEY_free(ecdh);
-        }
-#endif /* OPENSSL_HAS_SET_ECDH_AUTO | OPENSSL_HAS_SET_TMP_ECDH */
-        param = conf::ssl_key;
-        ctx.use_private_key_file(conf.get(param), asio::ssl::context::pem);
-        param = conf::ssl_cert;
-        ctx.use_certificate_file(conf.get(param), asio::ssl::context::pem);
-        param = conf::ssl_ca;
-        ctx.load_verify_file(conf.get(param, conf.get(conf::ssl_cert)));
-        param = conf::ssl_cipher;
-        std::string const value(conf.get(param));
-        if (!value.empty())
-        {
-            if (!SSL_CTX_set_cipher_list(ctx.impl(), value.c_str()))
-            {
-                throw_last_SSL_error("Error setting SSL cipher list to '"
-                                      + value + "'");
-            }
-            else
-            {
-                log_info << "SSL cipher list set to '" << value << '\'';
-            }
-        }
-        ctx.set_options(asio::ssl::context::no_sslv2 |
-                        asio::ssl::context::no_sslv3 |
-                        asio::ssl::context::no_tlsv1);
-    }
-    catch (asio::system_error& ec)
-    {
-        gu_throw_error(EINVAL) << "Bad value '" << conf.get(param, "")
-                               << "' for SSL parameter '" << param
-                               << "': " << extra_error_info(ec.code());
-    }
-    catch (gu::NotSet& ec)
-    {
-        gu_throw_error(EINVAL) << "Missing required value for SSL parameter '"
-                               << param << "'";
+    case gu::Signals::SignalType::S_CONFIG_RELOAD_CERTIFICATE:
+#ifdef GALERA_HAVE_SSL
+        load_crypto_context();
+#endif // GALERA_HAVE_SSL
+        break;
+    default:
+        break;
     }
 }
+
+bool gu::AsioIoService::ssl_enabled() const
+{
+#ifdef GALERA_HAVE_SSL
+    return impl_->ssl_context_.get();
+#else // GALERA_HAVE_SSL
+    return false;
+#endif
+}
+
+void gu::AsioIoService::load_crypto_context()
+{
+#ifdef GALERA_HAVE_SSL
+    if (conf_.has(conf::use_ssl) && conf_.get<bool>(conf::use_ssl, false))
+    {
+        if (not impl_->ssl_context_)
+        {
+            impl_->ssl_context_ = std::unique_ptr<asio::ssl::context>(
+                new asio::ssl::context(asio::ssl::context::sslv23));
+        }
+        ssl_prepare_context(conf_, *impl_->ssl_context_);
+    }
+#endif // GALERA_HAVE_SSL
+}
+
+void gu::AsioIoService::run_one()
+{
+    impl_->native().run_one();
+}
+
+void gu::AsioIoService::poll_one()
+{
+    impl_->native().poll_one();
+}
+
+void gu::AsioIoService::run()
+{
+    impl_->native().run();
+}
+
+void gu::AsioIoService::post(std::function<void()> fun)
+{
+    impl_->native().post(fun);
+}
+
+void gu::AsioIoService::stop()
+{
+    impl_->native().stop();
+}
+
+void gu::AsioIoService::reset()
+{
+    impl_->native().reset();
+}
+
+gu::AsioIoService::Impl& gu::AsioIoService::impl()
+{
+    return *impl_;
+}
+
+std::shared_ptr<gu::AsioSocket>
+gu::AsioIoService::make_socket(
+    const gu::URI& uri,
+    const std::shared_ptr<gu::AsioStreamEngine>& engine)
+{
+    return std::make_shared<AsioStreamReact>(*this, uri.get_scheme(), engine);
+}
+
+std::shared_ptr<gu::AsioDatagramSocket> gu::AsioIoService::make_datagram_socket(
+    const gu::URI& uri)
+{
+    if (uri.get_scheme() == gu::scheme::udp)
+        return std::make_shared<AsioUdpSocket>(*this);
+    gu_throw_error(EINVAL) << "Datagram socket scheme " << uri.get_scheme()
+                           << " not supported";
+    return std::shared_ptr<AsioDatagramSocket>();
+}
+
+std::shared_ptr<gu::AsioAcceptor> gu::AsioIoService::make_acceptor(
+    const gu::URI& uri)
+{
+    return std::make_shared<AsioAcceptorReact>(*this, uri.get_scheme());
+}
+
+//
+// Steady timer
+//
+
+class gu::AsioSteadyTimer::Impl
+{
+public:
+#if (__GNUC__ == 4 && __GNUC_MINOR__ == 4)
+    typedef asio::deadline_timer native_timer_type;
+#else
+    typedef asio::steady_timer native_timer_type;
+#endif /* #if (__GNUC__ == 4 && __GNUC_MINOR__ == 4) */
+
+    Impl(asio::io_service& io_service) : timer_(io_service) { }
+    native_timer_type& native() { return timer_; }
+    void handle_wait(const std::shared_ptr<AsioSteadyTimerHandler>& handler,
+                     const asio::error_code& ec)
+    {
+        handler->handle_wait(AsioErrorCode(ec.value(), ec.category()));
+    }
+private:
+    native_timer_type timer_;
+};
+
+#if (__GNUC__ == 4 && __GNUC_MINOR__ == 4)
+static inline boost::posix_time::time_duration
+to_native_duration(const gu::AsioClock::duration& duration)
+{
+    return boost::posix_time::nanosec(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
+}
+#else
+static inline std::chrono::steady_clock::duration
+to_native_duration(const gu::AsioClock::duration& duration)
+{
+    return duration;
+}
+#endif
+
+gu::AsioSteadyTimer::AsioSteadyTimer(
+    AsioIoService& io_service)
+    : impl_(new Impl(io_service.impl().native()))
+{ }
+
+gu::AsioSteadyTimer::~AsioSteadyTimer()
+{ }
+
+void gu::AsioSteadyTimer::expires_from_now(
+    const AsioClock::duration& duration)
+{
+    impl_->native().expires_from_now(to_native_duration(duration));
+}
+
+void gu::AsioSteadyTimer::async_wait(
+    const std::shared_ptr<AsioSteadyTimerHandler>& handler)
+{
+    impl_->native().async_wait(boost::bind(&Impl::handle_wait,
+                                           impl_.get(), handler,
+                                           asio::placeholders::error));
+}
+
+void gu::AsioSteadyTimer::cancel()
+{
+    impl_->native().cancel();
+}
+
+//
+// Allowlist
+//
+
+bool gu::allowlist_value_check(wsrep_allowlist_key_t key, const std::string& value)
+{
+    if (gu_allowlist_service == nullptr)
+    {
+        return true;
+    }
+    wsrep_buf_t const check_value = { value.c_str(), value.length() };
+    wsrep_status_t result(gu_allowlist_service->allowlist_cb(
+        gu_allowlist_service->context, key, &check_value));
+    switch (result)
+    {
+        case WSREP_OK:
+            return true;
+        case WSREP_NOT_ALLOWED:
+            return false;
+        default:
+            gu_throw_error(EINVAL) << "Unknown allowlist callback response: " << result 
+                                   << ", aborting.";
+    }
+}
+
+static std::mutex gu_allowlist_service_init_mutex;
+static size_t gu_allowlist_service_usage;
+
+int gu::init_allowlist_service_v1(wsrep_allowlist_service_v1_t* allowlist_service)
+{
+    std::lock_guard<std::mutex> lock(gu_allowlist_service_init_mutex);
+    ++gu_allowlist_service_usage;
+    if (gu_allowlist_service)
+    {
+        assert(gu_allowlist_service == allowlist_service);
+        return 0;
+    }
+    gu_allowlist_service = allowlist_service;
+    return 0;
+}
+
+void gu::deinit_allowlist_service_v1()
+{
+    std::lock_guard<std::mutex> lock(gu_allowlist_service_init_mutex);
+    assert(gu_allowlist_service_usage > 0);
+    --gu_allowlist_service_usage;
+    if (gu_allowlist_service_usage == 0) gu_allowlist_service = 0;
+}
+
+std::atomic<enum wsrep_node_isolation_mode> gu::gu_asio_node_isolation_mode{
+    WSREP_NODE_ISOLATION_NOT_ISOLATED
+};

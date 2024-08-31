@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2010-2019 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2021 Codership Oy <info@codership.com>
 //
 
 //! @file replicator_smm.hpp
@@ -11,6 +11,7 @@
 #define GALERA_REPLICATOR_SMM_HPP
 
 #include "replicator.hpp"
+#include "progress_callback.hpp"
 
 #include "gu_init.h"
 #include "GCache.hpp"
@@ -42,6 +43,7 @@ namespace galera
         {
             SST_NONE,
             SST_WAIT,
+            SST_JOIN_SENT,
             SST_REQ_FAILED,
             SST_FAILED
         } SstState;
@@ -69,9 +71,14 @@ namespace galera
             return wsdb_.get_trx(trx_params_, uuid_, trx_id, create);
         }
 
+        TrxHandleMasterPtr new_trx(const wsrep_uuid_t& uuid, wsrep_trx_id_t trx_id)
+        {
+            return wsdb_.new_trx(trx_params_, uuid, trx_id);
+        }
+
         TrxHandleMasterPtr new_local_trx(wsrep_trx_id_t trx_id)
         {
-            return wsdb_.new_trx(trx_params_, uuid_, trx_id);
+            return new_trx(uuid_, trx_id);
         }
 
         void discard_local_trx(TrxHandleMaster* trx)
@@ -173,18 +180,9 @@ namespace galera
 
         // IST Action handler interface
         void ist_trx(const TrxHandleSlavePtr& ts, bool must_apply,
-                     bool preload);
-        void ist_cc(const gcs_action&, bool must_apply, bool preload);
-        void ist_end(int error);
-
-        // Enter apply monitor without waiting
-        void apply_monitor_enter_immediately(const TrxHandleSlave& ts)
-        {
-            assert(!ts.explicit_rollback());
-            assert(ts.state() == TrxHandle::S_ABORTING);
-            ApplyOrder ao(ts.global_seqno(), 0, ts.local());
-            gu_trace(apply_monitor_.enter(ao));
-        }
+                     bool preload) override;
+        void ist_cc(const gcs_action&, bool must_apply, bool preload) override;
+        void ist_end(const ist::Result&) override;
 
         // Cancel local and enter apply monitors for TrxHandle
         void cancel_monitors_for_local(const TrxHandleSlave& ts)
@@ -195,8 +193,6 @@ namespace galera
 
             LocalOrder lo(ts);
             local_monitor_.self_cancel(lo);
-
-            gu_trace(apply_monitor_enter_immediately(ts));
         }
 
         // Cancel all monitors for given seqnos
@@ -264,15 +260,15 @@ namespace galera
                 mutex_(),
                 cond_(),
                 eof_(false),
-                error_(0),
+                result_(0, ""),
                 queue_()
             { }
-            void reset() { eof_ = false; error_ = 0; }
-            void eof(int error)
+            void reset() { eof_ = false; result_ = ist::Result{0, ""}; }
+            void eof(const ist::Result& result)
             {
                 gu::Lock lock(mutex_);
                 eof_ = true;
-                error_ = error;
+                result_ = result;
                 cond_.broadcast();
             }
 
@@ -313,12 +309,14 @@ namespace galera
                 }
                 else
                 {
-                    if (error_)
+                    if (result_.error)
                     {
-                        int err(error_);
-                        error_ = 0; // Make just one thread to detect the failure
+                        int err(result_.error);
+                        // Make just one thread to detect the failure
+                        result_.error = 0;
                         gu_throw_error(err)
-                            << "IST receiver reported failure";
+                            << "IST receiver reported failure: '"
+                            << result_.error_str << "' (" << err << ")";
                     }
                 }
 
@@ -329,7 +327,7 @@ namespace galera
             gu::Mutex mutex_;
             gu::Cond  cond_;
             bool eof_;
-            int error_;
+            ist::Result result_;
             std::queue<ISTEvent> queue_;
         };
 
@@ -401,32 +399,84 @@ namespace galera
         static wsrep_cap_t capabilities(int protocol_version);
 
         // Return the global seqno of the last transaction which has
-        // released commit order. Note that this does not mean that
-        // the transaction with given gtid has completed the commit
-        // on application side.
+        // commmitted.
+        //
+        // galera-bugs#555: Assign last seen from apply_monitor_.last_left()
+        // because apply monitor is held until the whole transaction is over.
+        // Commit monitor may be released early due to group commit.
         wsrep_seqno_t last_committed()
         {
-            return co_mode_ != CommitOrder::BYPASS ?
-                   commit_monitor_.last_left() : apply_monitor_.last_left();
+            return apply_monitor_.last_left();
         }
 
         void report_last_committed(wsrep_seqno_t purge_seqno)
         {
             if (gu_unlikely(purge_seqno != -1))
             {
+                assert(purge_seqno <= last_committed());
                 service_thd_.report_last_committed(purge_seqno);
             }
         }
+        // Helpers for configuration change processing
+        void drain_monitors_for_local_conf_change();
+        void process_non_prim_conf_change(void* recv_ctx,
+                                          const gcs_act_cchange&,
+                                          int my_index);
+        bool skip_prim_conf_change(const wsrep_view_info_t& view,
+                                   int group_proto_ver);
+        void process_first_view(const wsrep_view_info_t*, const wsrep_uuid_t&);
+        void process_group_change(const wsrep_view_info_t*);
+        void process_st_required(void* recv_ctx, int group_proto_ver,
+                                 const wsrep_view_info_t*);
+        void reset_index_if_needed(const wsrep_view_info_t* view_info,
+                                   int prev_protocol_version,
+                                   int next_protocol_version,
+                                   bool st_required);
+        void shift_to_next_state(Replicator::State next_state);
+        void become_joined_if_needed();
+        void submit_ordered_view_info(void* recv_ctx, const wsrep_view_info_t*);
+        void finish_local_prim_conf_change(int group_proto_ver,
+                                           wsrep_seqno_t seqno,
+                                           const char* context);
+        void process_prim_conf_change(void* recv_ctx,
+                                      const gcs_act_cchange&,
+                                      int my_index,
+                                      void* cc_buf);
+        void process_ist_conf_change(const gcs_act_cchange&);
+        TrxHandleSlavePtr get_real_ts_with_gcache_buffer(const TrxHandleSlavePtr&);
+        void handle_trx_overlapping_ist(const TrxHandleSlavePtr& ts);
 
-        /* process pending queue events scheduled before seqno */
-        void process_pending_queue(wsrep_seqno_t seqno);
+        // Helpers for IST processing.
+        void handle_ist_nbo(const TrxHandleSlavePtr& ts, bool must_apply,
+                            bool preload);
+        void handle_ist_trx_preload(const TrxHandleSlavePtr& ts,
+                                    bool must_apply);
+        void handle_ist_trx(const TrxHandleSlavePtr& ts, bool must_apply,
+                            bool preload);
 
+        /* process pending queue events scheduled before local_seqno */
+        void process_pending_queue(wsrep_seqno_t local_seqno);
+
+        // Enter local monitor. Return true if entered.
+        bool enter_local_monitor_for_cert(TrxHandleMaster*,
+                                          const TrxHandleSlavePtr&);
+        wsrep_status_t handle_local_monitor_interrupted(TrxHandleMaster*,
+                                                        const TrxHandleSlavePtr&);
+        wsrep_status_t finish_cert(TrxHandleMaster*,
+                                   const TrxHandleSlavePtr&);
         wsrep_status_t cert             (TrxHandleMaster*,
                                          const TrxHandleSlavePtr&);
         wsrep_status_t cert_and_catch   (TrxHandleMaster*,
                                          const TrxHandleSlavePtr&);
-        wsrep_status_t cert_for_aborted (const TrxHandleSlavePtr&);
-
+        // Enter apply monitor for local transaction. Return true
+        // if apply monitor was grabbed.
+        bool enter_apply_monitor_for_local(TrxHandleMaster&,
+                                           const TrxHandleSlavePtr&);
+        wsrep_status_t handle_apply_monitor_interrupted(TrxHandleMaster&,
+                                                        const TrxHandleSlavePtr&);
+        void enter_apply_monitor_for_local_not_committing(
+            const TrxHandleMaster&,
+            TrxHandleSlave&);
         wsrep_status_t handle_commit_interrupt(TrxHandleMaster&,
                                                const TrxHandleSlave&);
 
@@ -490,6 +540,12 @@ namespace galera
                         GU_DBUG_SYNC_WAIT("local_monitor_slave_enter_sync");
                         mutex.lock();
                     }
+                }
+                else
+                {
+                    mutex.unlock();
+                    GU_DBUG_SYNC_WAIT("local_monitor_enter_sync");
+                    mutex.lock();
                 }
             }
 #endif //GU_DBUG_ON
@@ -787,9 +843,12 @@ namespace galera
         void record_cc_seqnos(wsrep_seqno_t cc_seqno, const char* source);
 
         bool state_transfer_required(const wsrep_view_info_t& view_info,
+                                     int group_proto_ver,
                                      bool rejoined);
 
         void prepare_for_IST (void*& req, ssize_t& req_len,
+                              int group_proto_ver,
+                              int str_proto_ver,
                               const wsrep_uuid_t& group_uuid,
                               wsrep_seqno_t       group_seqno);
 
@@ -798,19 +857,22 @@ namespace galera
 
         StateRequest* prepare_state_request (const void* sst_req,
                                              ssize_t     sst_req_len,
+                                             int         group_proto_ver,
+                                             int         str_proto_ver,
                                              const wsrep_uuid_t& group_uuid,
                                              wsrep_seqno_t       group_seqno);
 
-        void send_state_request (const StateRequest* req);
+        void send_state_request (const StateRequest* req, int str_proto_ver);
 
         void request_state_transfer (void* recv_ctx,
+                                     int                 group_proto_ver,
                                      const wsrep_uuid_t& group_uuid,
                                      wsrep_seqno_t       group_seqno,
                                      const void*         sst_req,
                                      ssize_t             sst_req_len);
 
         /* resume reception of GCS events */
-        void resume_recv() { gcs_.resume_recv(); ist_end(0); }
+        void resume_recv() { gcs_.resume_recv(); ist_end(ist::Result{0, ""}); }
 
         /* These methods facilitate closing procedure.
          * They must be called under closing_mutex_ lock */
@@ -852,7 +914,7 @@ namespace galera
 
         /*
          * |--------------------------------------------------------------------|
-         * | protocol_version_ | trx version | str_proto_ver_ | record_set_ver_ |
+         * | protocol_version_ | trx version | str_proto_ver  | record_set_ver_ |
          * |--------------------------------------------------------------------|
          * |                 1 |           1 |              0 |               1 |
          * |                 2 |           1 |              1 |               1 |
@@ -865,10 +927,18 @@ namespace galera
          * |                 9 | SS keys   4 |              2 |               2 |
          * | 4.x            10 | PA range/ 5 | CC events /  3 |               2 |
          * |                   | UPD keys    | idx preload    |                 |
+         * |                11 | SRV keys  6 |              3 |               2 |
          * |--------------------------------------------------------------------|
+         *
+         * Note: str_proto_ver is decided in replicator_str.cpp based on
+         *       given protocol version.
          */
 
-        int                    str_proto_ver_;// state transfer request protocol
+        /* last protocol version of Galera 3 series */
+        static int const PROTO_VER_GALERA_3_MAX = 9;
+        /* repl protocol version which orders CC */
+        static int const PROTO_VER_ORDERED_CC = 10;
+
         int                    protocol_version_;// general repl layer proto
         int                    proto_max_;    // maximum allowed proto version
 
@@ -922,13 +992,16 @@ namespace galera
         bool          sst_received_;
 
         // services
-        gcache::GCache gcache_;
-        GCS_IMPL       gcs_;
-        ServiceThd     service_thd_;
+        ProgressCallback<int64_t> gcache_progress_cb_;
+        gcache::GCache   gcache_;
+        ProgressCallback<gcs_seqno_t> joined_progress_cb_;
+        GCS_IMPL         gcs_;
+        ServiceThd       service_thd_;
 
         // action sources
         TrxHandleSlave::Pool slave_pool_;
         ActionSource*        as_;
+        ProgressCallback<wsrep_seqno_t>ist_progress_cb_;
         ist::Receiver        ist_receiver_;
         ist::AsyncSenderMap  ist_senders_;
 
@@ -939,14 +1012,16 @@ namespace galera
         class PendingCertQueue
         {
         public:
-            PendingCertQueue() :
+            PendingCertQueue(gcache::GCache& gcache) :
                 mutex_(),
-                ts_queue_()
+                ts_queue_(),
+                gcache_(gcache)
             { }
 
             void push(const TrxHandleSlavePtr& ts)
             {
                 assert(ts->local());
+                assert(ts->local_seqno() > 0);
                 gu::Lock lock(mutex_);
                 ts_queue_.push(ts);
                 ts->mark_queued();
@@ -959,8 +1034,8 @@ namespace galera
                 if (!ts_queue_.empty())
                 {
                     const TrxHandleSlavePtr& top(ts_queue_.top());
-                    assert(top->global_seqno() != seqno);
-                    if (top->global_seqno() < seqno)
+                    assert(top->local_seqno() != seqno);
+                    if (top->local_seqno() < seqno)
                     {
                         ret = top;
                         ts_queue_.pop();
@@ -969,19 +1044,31 @@ namespace galera
                 return ret;
             }
 
+            void clear()
+            {
+                gu::Lock lock(mutex_);
+                while (not ts_queue_.empty())
+                {
+                    TrxHandleSlavePtr ts(ts_queue_.top());
+                    ts_queue_.pop();
+                    gcache_.free(const_cast<void*>(ts->action().first));
+                }
+            }
+
         private:
-            struct TrxHandleSlavePtrCmpGlobalSeqno
+            struct TrxHandleSlavePtrCmpLocalSeqno
             {
                 bool operator()(const TrxHandleSlavePtr& lhs,
                                 const TrxHandleSlavePtr& rhs) const
                 {
-                    return lhs->global_seqno() > rhs->global_seqno();
+                    return lhs->local_seqno() > rhs->local_seqno();
                 }
             };
             gu::Mutex mutex_;
             std::priority_queue<TrxHandleSlavePtr,
                                 std::vector<TrxHandleSlavePtr>,
-                                TrxHandleSlavePtrCmpGlobalSeqno> ts_queue_;
+                                TrxHandleSlavePtrCmpLocalSeqno> ts_queue_;
+            gcache::GCache& gcache_;
         };
 
         PendingCertQueue pending_cert_queue_;
@@ -1029,6 +1116,15 @@ namespace galera
     { o.print(os); return os; }
 #endif /* GALERA_MONITOR_DEBUG_PRINT */
 
+    /**
+     * Get transaction protocol and record set versions based on group protocol
+     *
+     * @param proto_ver Group protocol version
+     *
+     * @return Tuple consisting of trx protocol and record set versions.
+     */
+    std::tuple<int, enum gu::RecordSet::Version>
+    get_trx_protocol_versions(int proto_ver);
 } /* namespace galera */
 
 #endif /* GALERA_REPLICATOR_SMM_HPP */

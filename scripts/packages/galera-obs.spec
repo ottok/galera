@@ -15,6 +15,10 @@
 # Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston
 # MA  02110-1301  USA.
 
+# If without_crypto == 1, the library will be built without
+# SSL/TLS support.
+%{!?without_crypto: %global without_crypto 0}
+
 %{!?name: %define name galera-4}
 %{!?wsrep_api: %define wsrep_api 26}
 %{!?version: %define version %{wsrep_api}_4.x}
@@ -50,6 +54,23 @@
 %define dist .lp151
 %define ssl_package_devel libopenssl-devel
 %endif
+%if 0%{?sle_version} == 120500 && !0%{?is_opensuse}
+%define dist .sl12
+%endif
+%if 0%{?sle_version} == 150000 && !0%{?is_opensuse}
+%define dist .sl15
+%define ssl_package_devel libopenssl-devel
+%endif
+%if 0%{?sle_version} == 150100 && !0%{?is_opensuse}
+%define dist .sl15_1
+%define ssl_package_devel libopenssl-devel
+%endif
+%if 0%{?sle_version} == 150200 && !0%{?is_opensuse}
+%define dist .sl15_2
+%define ssl_package_devel libopenssl-devel
+%endif
+
+
 
 
 Name:          %{name}
@@ -69,7 +90,13 @@ BuildRequires: boost-devel >= 1.41
 BuildRequires: check-devel
 BuildRequires: glibc-devel
 BuildRequires: %{ssl_package_devel}
+%if 0%{?rhel} >= 8 || 0%{?centos} >= 8
+BuildRequires: python3-scons
+%define scons_cmd scons-3
+%else
 BuildRequires: scons
+%define scons_cmd scons
+%endif
 %if 0%{?suse_version} == 1110
 # On SLES11 SPx use the linked gcc47 to build instead of default gcc43
 BuildRequires: gcc47 gcc47-c++
@@ -129,7 +156,7 @@ Provides:      galera, galera4, Percona-XtraDB-Cluster-galera-%{wsrep_api}
 %description
 Galera is a fast synchronous multimaster wsrep provider (replication engine)
 for transactional databases and similar applications. For more information
-about wsrep API see http://launchpad.net/wsrep. For a description of Galera
+about wsrep API see https://github.com/codership/wsrep-API. For a description of Galera
 replication engine see http://www.codership.com.
 
 %{copyright}
@@ -161,7 +188,10 @@ export CXX=g++-4.7
 
 NUM_JOBS=${NUM_JOBS:-$(ncpu=$(cat /proc/cpuinfo | grep processor | wc -l) && echo $(($ncpu > 4 ? 4 : $ncpu)))}
 
-scons -j$(echo $NUM_JOBS) revno=%{revision} deterministic_tests=1
+%if 0%{?without_crypto}
+%define crypto_opt ssl=0
+%endif
+%{scons_cmd} -j$(echo $NUM_JOBS) revno=%{revision} deterministic_tests=1 %{?crypto_opt}
 
 %install
 RBR=$RPM_BUILD_ROOT # eg. rpmbuild/BUILDROOT/galera-4-4.x-44.1.x86_64
@@ -209,8 +239,6 @@ install -m 755 $RBD/libgalera_smm.so              $RBR%{libs}/libgalera_smm.so
 install -d $RBR%{docs}
 install -m 644 $RBD/COPYING                       $RBR%{docs}/COPYING
 install -m 644 $RBD/asio/LICENSE_1_0.txt          $RBR%{docs}/LICENSE.asio
-install -m 644 $RBD/www.evanjones.ca/LICENSE      $RBR%{docs}/LICENSE.crc32c
-install -m 644 $RBD/chromium/LICENSE              $RBR%{docs}/LICENSE.chromium
 install -m 644 $RBD/scripts/packages/README       $RBR%{docs}/README
 install -m 644 $RBD/scripts/packages/README-MySQL $RBR%{docs}/README-MySQL
 
@@ -317,8 +345,6 @@ fi
 %attr(0755,root,root) %dir %{docs}
 %doc %attr(0644,root,root) %{docs}/COPYING
 %doc %attr(0644,root,root) %{docs}/LICENSE.asio
-%doc %attr(0644,root,root) %{docs}/LICENSE.crc32c
-%doc %attr(0644,root,root) %{docs}/LICENSE.chromium
 %doc %attr(0644,root,root) %{docs}/README
 %doc %attr(0644,root,root) %{docs}/README-MySQL
 

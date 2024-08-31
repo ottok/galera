@@ -21,10 +21,6 @@
 #                    extra node to arbitrate split brain situations.
 ### END INIT INFO
 
-# On Debian Jessie, avoid redirecting calls to this script to 'systemctl start'
-
-_SYSTEMCTL_SKIP_REDIRECT=true
-
 # Source function library.
 if [ -f /etc/redhat-release ]; then
 	. /etc/init.d/functions
@@ -139,6 +135,7 @@ start() {
 	[ -n "$GALERA_GROUP" ]   && OPTIONS="$OPTIONS -g '$GALERA_GROUP'"
 	[ -n "$GALERA_OPTIONS" ] && OPTIONS="$OPTIONS -o '$GALERA_OPTIONS'"
 	[ -n "$LOG_FILE" ]       && OPTIONS="$OPTIONS -l '$LOG_FILE'"
+	[ -n "$WORK_DIR" ]       && OPTIONS="$OPTIONS -w '$WORK_DIR'"
 
 	eval program_start $OPTIONS
 }
@@ -178,4 +175,3 @@ case "$1" in
 	echo $"Usage: $0 {start|stop|status|restart|reload}"
 	exit 2
 esac
-

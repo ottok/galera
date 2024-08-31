@@ -40,6 +40,7 @@ namespace gu
         {
 #ifdef GU_MUTEX_DEBUG
             mtx_.locked_ = false;
+            mtx_.disown();
 #endif /* GU_MUTEX_DEBUG */
             cond.ref_count++;
             gu_cond_wait (&(cond.cond), &mtx_.impl()); // never returns error
@@ -57,6 +58,7 @@ namespace gu
             date._timespec(ts);
 #ifdef GU_MUTEX_DEBUG
             mtx_.locked_ = false;
+            mtx_.disown();
 #endif /* GU_MUTEX_DEBUG */
             cond.ref_count++;
             int const ret(gu_cond_timedwait (&(cond.cond), &mtx_.impl(), &ts));
@@ -66,7 +68,7 @@ namespace gu
             mtx_.owned_  = gu_thread_self();
 #endif /* GU_MUTEX_DEBUG */
 
-            if (gu_unlikely(ret)) gu_throw_error(ret);
+            if (gu_unlikely(ret)) gu_throw_system_error(ret);
         }
     };
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2016 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2020 Codership Oy <info@codership.com>
  *
  * $Id$
  *
@@ -15,6 +15,7 @@
 #include "gcs_backend.hpp"
 #include "gcs_comp_msg.hpp"
 #include "gcs_code_msg.hpp"
+#include "gcs_error.hpp"
 #include "gcs_fifo_lite.hpp"
 #include "gcs_group.hpp"
 #include "gcs_gcache.hpp"
@@ -26,6 +27,8 @@
 
 #include <string.h> // for mempcpy
 #include <errno.h>
+
+#include <cinttypes>
 
 using namespace gcs::core;
 
@@ -216,14 +219,14 @@ gcs_core_open (gcs_core_t* core,
             core->state = CORE_NON_PRIMARY;
         }
         else {
-            gu_error ("Failed to open backend connection: %d (%s)",
+            gu_error ("Failed to open backend connection: %ld (%s)",
                       ret, strerror(-ret));
             core->backend.destroy (&core->backend);
         }
 
     }
     else {
-        gu_error ("Failed to initialize backend using '%s': %d (%s)",
+        gu_error ("Failed to initialize backend using '%s': %ld (%s)",
                   url, ret, strerror(-ret));
     }
 
@@ -351,7 +354,7 @@ gcs_core_send (gcs_core_t*          const conn,
     }
     else {
         ret = core_error (conn->state);
-        gu_error ("Failed to access core FIFO: %d (%s)", ret, strerror (-ret));
+        gu_error ("Failed to access core FIFO: %zd (%s)", ret, strerror (-ret));
         return ret;
     }
 
@@ -368,7 +371,7 @@ gcs_core_send (gcs_core_t*          const conn,
         size_t to_copy = chunk_size;
 
         while (to_copy > 0) {        // gather action bufs into one
-            if (to_copy < left) {
+            if (to_copy <= left) {
                 memcpy (dst, ptr, to_copy);
                 ptr     += to_copy;
                 left    -= to_copy;
@@ -486,7 +489,7 @@ core_msg_recv (gcs_backend_t* backend, gcs_recv_msg_t* recv_msg,
         /* sometimes - like in case of component message, we may need to
          * do reallocation 2 times. This should be fixed in backend */
         void* msg = gu_realloc (recv_msg->buf, ret);
-        gu_debug ("Reallocating buffer from %d to %d bytes",
+        gu_debug ("Reallocating buffer from %d to %ld bytes",
                   recv_msg->buf_len, ret);
         if (msg) {
             /* try again */
@@ -500,7 +503,7 @@ core_msg_recv (gcs_backend_t* backend, gcs_recv_msg_t* recv_msg,
         }
         else {
             /* realloc unsuccessfull, old recv_buf remains */
-            gu_error ("Failed to reallocate buffer to %d bytes", ret);
+            gu_error ("Failed to reallocate buffer to %ld bytes", ret);
             ret = -ENOMEM;
             break;
         }
@@ -509,7 +512,7 @@ core_msg_recv (gcs_backend_t* backend, gcs_recv_msg_t* recv_msg,
     assert(recv_msg->buf);
 
     if (gu_unlikely(ret < 0)) {
-        gu_debug ("returning %d: %s\n", ret, strerror(-ret));
+        gu_debug ("returning %ld: %s\n", ret, strerror(-ret));
     }
 
     return ret;
@@ -570,7 +573,7 @@ core_handle_act_msg (gcs_core_t*          core,
 #else
             assert (NULL == act->act.buf);
 #endif
-            act->sender_idx = msg->sender_idx;
+            assert(act->sender_idx == msg->sender_idx);
 
             if (gu_likely(!my_msg)) {
                 /* foreign action, must be passed from gcs_group */
@@ -593,8 +596,10 @@ core_handle_act_msg (gcs_core_t*          core,
                     /* NOTE! local_act cannot be used after this point */
                     /* sanity check */
                     if (gu_unlikely(sent_act_id != frg.act_id)) {
-                        gu_fatal ("FIFO violation: expected sent_act_id %lld "
-                                  "found %lld", sent_act_id, frg.act_id);
+                        gu_fatal("FIFO violation: expected sent_act_id %" PRId64
+                                 " "
+                                 "found %" PRId64,
+                                 sent_act_id, frg.act_id);
                         ret = -ENOTRECOVERABLE;
                     }
                     if (gu_unlikely(act->act.buf_len != ret)) {
@@ -637,7 +642,7 @@ core_handle_act_msg (gcs_core_t*          core,
                 ret = gcs_group_handle_state_request (group, act);
                 assert (ret <= 0 || ret == act->act.buf_len);
 #ifdef GCS_FOR_GARB
-                if (ret < 0) gu_fatal ("Handling state request failed: %d",ret);
+                if (ret < 0) gu_fatal ("Handling state request failed: %ld",ret);
                 act->act.buf = NULL;
             }
             else {
@@ -661,7 +666,7 @@ core_handle_act_msg (gcs_core_t*          core,
     }
     else {
         /* Non-primary conf, foreign message - ignore */
-        gu_warn ("Action message in non-primary configuration from "
+        gu_info ("Action message in non-primary configuration from "
                  "member %d", msg->sender_idx);
         ret = 0;
     }
@@ -764,6 +769,17 @@ core_handle_vote_msg (gcs_core_t*          core,
     return 0;
 }
 
+/*! Common things to do on detected inconsistency */
+static int
+core_handle_inconsistency(gcs_core_t* core, struct gcs_act* act)
+{
+    core->state  = CORE_NON_PRIMARY;
+    act->buf     = NULL;
+    act->buf_len = 0;
+    act->type    = GCS_ACT_INCONSISTENCY;
+    return -ENOTRECOVERABLE;
+}
+
 /*!
  * Helper for gcs_core_recv(). Handles GCS_MSG_COMPONENT.
  *
@@ -781,7 +797,7 @@ core_handle_comp_msg (gcs_core_t*          const core,
     assert (GCS_MSG_COMPONENT == msg->type);
 
     if (msg->size < (ssize_t)sizeof(gcs_comp_msg_t)) {
-        gu_error ("Malformed component message (size %zd < %zd). Ignoring",
+        gu_error ("Malformed component message (size %d < %zu). Ignoring",
                   msg->size, sizeof(gcs_comp_msg_t));
         return 0;
     }
@@ -800,7 +816,7 @@ core_handle_comp_msg (gcs_core_t*          const core,
 
         ret = gcs_group_act_conf (group, rcvd, &core->proto_ver);
         if (ret < 0) {
-            gu_fatal ("Failed create PRIM CONF action: %d (%s)",
+            gu_fatal ("Failed create PRIM CONF action: %zd (%s)",
                       ret, strerror (-ret));
             assert (0);
             ret = -ENOTRECOVERABLE;
@@ -823,11 +839,25 @@ core_handle_comp_msg (gcs_core_t*          const core,
                                           &uuid,
                                           sizeof(uuid),
                                           GCS_MSG_STATE_UUID);
-                if (ret < 0) {
+                if (ret < 0)
+                {
                     // if send() failed, it means new configuration change
                     // is on the way. Probably should ignore.
-                    gu_warn ("Failed to send state UUID: %d (%s)",
-                             ret, strerror (-ret));
+                    switch (-ret)
+                    {
+                    case EAGAIN:
+                        gu_info("Temporary failure in sending state UUID, "
+                                "will try again in next primary component");
+                        break;
+                    case ENOTCONN:
+                        gu_info("Failed to send state UUID: Connection to "
+                                "cluster was closed");
+                        break;
+                    default:
+                        gu_warn("Failed to send state UUID: %zd (%s)", ret,
+                                gcs_error_str(-ret));
+                        break;
+                    }
                 }
                 else {
                     gu_info ("STATE_EXCHANGE: sent state UUID: "
@@ -852,7 +882,7 @@ core_handle_comp_msg (gcs_core_t*          const core,
                     assert(act->buf == NULL);
                     assert(act->buf_len == 0);
                     act->type = GCS_ACT_ERROR;
-                    gu_debug("comp msg error in core %d", -ret);
+                    gu_debug("comp msg error in core %ld", -ret);
                 }
             }
             else {                               // regular non-prim
@@ -862,7 +892,7 @@ core_handle_comp_msg (gcs_core_t*          const core,
             if (GCS_GROUP_NON_PRIMARY == ret) { // no error in comp msg
                 ret = gcs_group_act_conf (group, rcvd, &core->proto_ver);
                 if (ret < 0) {
-                    gu_fatal ("Failed create NON-PRIM CONF action: %d (%s)",
+                    gu_fatal ("Failed create NON-PRIM CONF action: %ld (%s)",
                               ret, strerror (-ret));
                     assert (0);
                     ret = -ENOTRECOVERABLE;
@@ -874,6 +904,9 @@ core_handle_comp_msg (gcs_core_t*          const core,
         }
         assert (ret == act->buf_len || ret < 0);
         break;
+    case GCS_GROUP_INCONSISTENT:
+        ret = core_handle_inconsistency(core, act);
+        break;
     case GCS_GROUP_WAIT_STATE_MSG:
         gu_fatal ("Internal error: gcs_group_handle_comp() returned "
                   "WAIT_STATE_MSG. Can't continue.");
@@ -881,7 +914,7 @@ core_handle_comp_msg (gcs_core_t*          const core,
         assert(0);
         // fall through
     default:
-        gu_fatal ("Failed to handle component message: %d (%s)!",
+        gu_fatal ("Failed to handle component message: %ld (%s)!",
                   ret, strerror (-ret));
         assert(0);
     }
@@ -932,7 +965,7 @@ core_handle_uuid_msg (gcs_core_t*     core,
                         // This may happen if new configuraiton chage goes on.
                         // What shall we do in this case? Is it unrecoverable?
                         gu_error ("STATE EXCHANGE: failed for: " GU_UUID_FORMAT
-                                 ": %d (%s)",
+                                 ": %zd (%s)",
                                  GU_UUID_ARGS(state_uuid), ret, strerror(-ret));
                     }
                     gcs_state_msg_destroy (state);
@@ -948,7 +981,7 @@ core_handle_uuid_msg (gcs_core_t*     core,
             break;
         default:
             assert(ret < 0);
-            gu_error ("Failed to handle state UUID: %d (%s)",
+            gu_error ("Failed to handle state UUID: %zd (%s)",
                       ret, strerror (-ret));
         }
     }
@@ -997,7 +1030,7 @@ core_handle_state_msg (gcs_core_t*          core,
 
             ret = gcs_group_act_conf (group, rcvd, &core->proto_ver);
             if (ret < 0) {
-                gu_fatal ("Failed create CONF action: %d (%s)",
+                gu_fatal ("Failed create CONF action: %zd (%s)",
                           ret, strerror (-ret));
                 assert (0);
                 ret = -ENOTRECOVERABLE;
@@ -1008,9 +1041,12 @@ core_handle_state_msg (gcs_core_t*          core,
             // waiting for more state messages
             ret = 0;
             break;
+        case GCS_GROUP_INCONSISTENT:
+            ret = core_handle_inconsistency(core, &rcvd->act);
+            break;
         default:
             assert (ret < 0);
-            gu_error ("Failed to handle state message: %d (%s)",
+            gu_error ("Failed to handle state message: %zd (%s)",
                       ret, strerror (-ret));
         }
         gu_mutex_unlock (&core->send_lock);
@@ -1098,7 +1134,7 @@ core_msg_to_action (gcs_core_t*          core,
             }
             break;
         default:
-            gu_error ("Iternal error. Unexpected message type %s from %ld",
+            gu_error ("Iternal error. Unexpected message type %s from %d",
                       gcs_msg_type_string[msg->type], msg->sender_idx);
             assert (0);
             ret = -EPROTO;
@@ -1112,7 +1148,10 @@ core_msg_to_action (gcs_core_t*          core,
         }
     }
     else {
-        gu_warn ("%s message from member %ld in non-primary configuration. "
+        /* Messages which were sent just before cluster partitioning may
+         * be delivered in the following non-primary configuration. This
+         * is expected behavior, so info log level is enough. */
+        gu_info ("%s message from member %d in non-primary configuration. "
                  "Ignored.", gcs_msg_type_string[msg->type], msg->sender_idx);
     }
 
@@ -1124,7 +1163,7 @@ static long core_msg_causal(gcs_core_t* conn,
 {
     if (gu_unlikely(msg->size != sizeof(causal_act_t)))
     {
-        gu_error("invalid causal act len %ld, expected %ld",
+        gu_error("invalid causal act len %d, expected %zu",
                  msg->size, sizeof(causal_act_t));
         return -EPROTO;
     }
@@ -1202,17 +1241,17 @@ ssize_t gcs_core_recv (gcs_core_t*          conn,
         case GCS_MSG_COMPONENT:
             ret = core_handle_comp_msg (conn, recv_msg, recv_act);
             // assert (ret >= 0); // hang on error in debug mode
-            assert (ret == recv_act->act.buf_len || ret <= 0);
+            assert (ret == recv_act->act.buf_len || ret < 0);
             break;
         case GCS_MSG_STATE_UUID:
             ret = core_handle_uuid_msg (conn, recv_msg);
             // assert (ret >= 0); // hang on error in debug mode
-            ret = 0;           // continue waiting for state messages
+            ret = 0;              // continue waiting for state messages
             break;
         case GCS_MSG_STATE_MSG:
             ret = core_handle_state_msg (conn, recv_msg, recv_act);
-            assert (ret >= 0); // hang on error in debug mode
-            assert (ret == recv_act->act.buf_len);
+            // assert (ret >= 0); // hang on error in debug mode
+            assert (ret == recv_act->act.buf_len || ret < 0);
             break;
         case GCS_MSG_JOIN:
         case GCS_MSG_SYNC:
@@ -1265,7 +1304,10 @@ out:
 
         if (-ENOTRECOVERABLE == ret) {
             conn->backend.close(&conn->backend);
-            gu_abort();
+            if (GCS_ACT_INCONSISTENCY != recv_act->act.type) {
+                /* inconsistency event must be passed up */
+                gu_abort();
+            }
         }
     }
 

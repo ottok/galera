@@ -1,22 +1,21 @@
 /*
- * Copyright (C) 2012-2014 Codership Oy <info@codership.com>
+ * Copyright (C) 2012-2019 Codership Oy <info@codership.com>
  */
 
 #include "defaults.hpp"
+#include "asio_tcp.hpp"
 
 #include "gcomm/common.hpp"
 
 namespace gcomm
 {
-#ifdef HAVE_ASIO_HPP
     std::string const Defaults::ProtonetBackend         = "asio";
-#else
-#error "Only asio protonet backend is currently supported"
-#endif /* HAVE_ASIO_HPP */
-
     std::string const Defaults::ProtonetVersion         = "0";
     std::string const Defaults::SocketChecksum          = "2";
-    std::string const Defaults::SocketRecvBufSize       = "212992";
+    std::string const Defaults::SocketRecvBufSize       =
+        GCOMM_ASIO_AUTO_BUF_SIZE;
+    std::string const Defaults::SocketSendBufSize       =
+        GCOMM_ASIO_AUTO_BUF_SIZE;
     std::string const Defaults::GMCastVersion           = "0";
     std::string const Defaults::GMCastTcpPort           = BASE_PORT_DEFAULT;
     std::string const Defaults::GMCastSegment           = "0";

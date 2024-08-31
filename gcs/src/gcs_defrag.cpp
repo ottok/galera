@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2020 Codership Oy <info@codership.com>
  *
  * $Id$
  */
@@ -7,12 +7,13 @@
 #include "gcs_defrag.hpp"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <unistd.h>
 #include <string.h>
 
 #define DF_ALLOC()                                              \
     do {                                                        \
-        df->head = static_cast<uint8_t*>(gcs_gcache_malloc (df->cache, df->size)); \
+        df->head = static_cast<uint8_t*>(gcs_gcache_malloc(df->cache,df->size));\
                                                                 \
         if(gu_likely(df->head != NULL))                         \
             df->tail = df->head;                                \
@@ -58,9 +59,9 @@ gcs_defrag_handle_frag (gcs_defrag_t*         df,
                 /* df->sent_id was aborted halfway and is being taken care of
                  * by the sender thread. Forget about it.
                  * Reinit counters and continue with the new action. */
-                gu_debug ("Local action %lld, size %ld reset.",
-                          frg->act_id, frg->act_size);
-                df->frag_no  = 0;
+                gu_debug("Local action %" PRId64 ", size %ld reset.",
+                         frg->act_id, frg->act_size);
+                df->frag_no = 0;
                 df->received = 0;
                 df->tail     = df->head;
                 df->reset    = false;
@@ -83,18 +84,20 @@ gcs_defrag_handle_frag (gcs_defrag_t*         df,
             }
             else if (frg->act_id == df->sent_id && frg->frag_no < df->frag_no) {
                 /* gh172: tolerate duplicate fragments in production. */
-                gu_warn ("Duplicate fragment %lld:%ld, expected %lld:%ld. "
-                         "Skipping.",
-                         frg->act_id, frg->frag_no, df->sent_id, df->frag_no);
+                gu_warn("Duplicate fragment %" PRId64 ":%ld, expected %" PRId64
+                        ":%ld. "
+                        "Skipping.",
+                        frg->act_id, frg->frag_no, df->sent_id, df->frag_no);
                 df->frag_no--; // revert counter in hope that we get good frag
                 assert(0);
                 return 0;
             }
             else {
                 gu_error ("Unordered fragment received. Protocol error.");
-                gu_error ("Expected: %llu:%ld, received: %llu:%ld",
-                          df->sent_id, df->frag_no, frg->act_id, frg->frag_no);
-                gu_error ("Contents: '%.*s'", frg->frag_len, (char*)frg->frag);
+                gu_error("Expected: %" PRId64 ":%ld, received: %" PRId64 ":%ld",
+                         df->sent_id, df->frag_no, frg->act_id, frg->frag_no);
+                gu_error("Contents: '%.*s'", static_cast<int>(frg->frag_len),
+                         (char*)frg->frag);
                 df->frag_no--; // revert counter in hope that we get good frag
                 assert(0);
                 return -EPROTO;
@@ -122,18 +125,19 @@ gcs_defrag_handle_frag (gcs_defrag_t*         df,
             if (!local && df->reset) {
                 /* can happen after configuration change,
                    just ignore this message calmly */
-                gu_debug ("Ignoring fragment %lld:%ld (size %d) after reset",
-                          frg->act_id, frg->frag_no, frg->act_size);
+                gu_debug("Ignoring fragment %" PRId64
+                         ":%ld (size %zu) after reset",
+                         frg->act_id, frg->frag_no, frg->act_size);
                 return 0;
             }
             else {
                 ((char*)frg->frag)[frg->frag_len - 1] = '\0';
                 gu_error ("Unordered fragment received. Protocol error.");
-                gu_error ("Expected: any:0(first), received: %lld:%ld",
-                          frg->act_id, frg->frag_no);
-                gu_error ("Contents: '%s', local: %s, reset: %s",
-                          (char*)frg->frag, local ? "yes" : "no",
-                          df->reset ? "yes" : "no");
+                gu_error("Expected: any:0(first), received: %" PRId64 ":%lu",
+                         frg->act_id, frg->frag_no);
+                gu_error("Contents: '%s', local: %s, reset: %s",
+                         (char*)frg->frag, local ? "yes" : "no",
+                         df->reset ? "yes" : "no");
                 assert(0);
                 return -EPROTO;
             }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2018 Codership Oy <info@codership.com>
+ * Copyright (C) 2010-2021 Codership Oy <info@codership.com>
  */
 
 /*! @file ring buffer storage class */
@@ -23,7 +23,8 @@ namespace gcache
     {
     public:
 
-        RingBuffer (const std::string& name,
+        RingBuffer (ProgressCallback*  pcb,
+                    const std::string& name,
                     size_t             size,
                     seqno2ptr_t&       seqno2ptr,
                     gu::UUID&          gid,
@@ -129,6 +130,15 @@ namespace gcache
 
         void set_debug(int const dbg) { debug_ = dbg & DEBUG; }
 
+#ifdef GCACHE_RB_UNIT_TEST
+        ptrdiff_t offset(const void* const ptr) const
+        {
+            return static_cast<const uint8_t*>(ptr) - start_;
+        }
+#endif
+
+        void dump_map() const;
+
     private:
 
         static size_t const PREAMBLE_LEN = 1024;
@@ -141,6 +151,7 @@ namespace gcache
 
         static int    const DEBUG = 2; // debug flag
 
+        ProgressCallback*  pcb_;
         gu::FileDescriptor fd_;
         gu::MMap           mmap_;
         char*        const preamble_; // ASCII text preamble
@@ -179,7 +190,7 @@ namespace gcache
         void          close_preamble();
 
         // returns lower bound (not inclusive) of valid seqno range
-        int64_t       scan(off_t offset, int scan_step);
+        seqno_t       scan(off_t offset, int scan_step);
         void          recover(off_t offset, int version);
 
         void          estimate_space();

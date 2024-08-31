@@ -74,7 +74,7 @@ gu::ThreadSchedparam gu::thread_get_schedparam(pthread_t thd)
     int err;
     if ((err = pthread_getschedparam(thd, &policy, &sp)) != 0)
     {
-        gu_throw_error(err) << "Failed to read thread schedparams";
+        gu_throw_system_error(err) << "Failed to read thread schedparams";
     }
     return ThreadSchedparam(policy, sp.sched_priority);
 }
@@ -94,7 +94,7 @@ void gu::thread_set_schedparam(pthread_t thd, const gu::ThreadSchedparam& sp)
     {
         if (err == ENOSYS)
         {
-            log_warn << "Function pthread_setschedparam() is not implmented "
+            log_warn << "Function pthread_setschedparam() is not implemented "
                      << "in this system. Future attempts to change scheduling "
                      << "priority will be no-op";
 
@@ -102,7 +102,8 @@ void gu::thread_set_schedparam(pthread_t thd, const gu::ThreadSchedparam& sp)
         }
         else
         {
-            gu_throw_error(err) << "Failed to set thread schedparams " << sp;
+            gu_throw_system_error(err)
+                << "Failed to set thread schedparams " << sp;
         }
     }
 }

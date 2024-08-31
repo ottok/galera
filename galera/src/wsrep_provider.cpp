@@ -1,9 +1,10 @@
 //
-// Copyright (C) 2010-2017 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2021 Codership Oy <info@codership.com>
 //
 
 #include "key_data.hpp"
 #include "gu_serialize.hpp"
+#include "gu_asio.hpp" //  // gu::init_allowlist_service_v1()
 
 #if defined(GALERA_MULTIMASTER)
 #include "replicator_smm.hpp"
@@ -13,6 +14,9 @@
 #endif
 
 #include "wsrep_params.hpp"
+#include "gu_event_service.hpp"
+#include "wsrep_config_service.h"
+#include "wsrep_node_isolation.h"
 
 #include <cassert>
 
@@ -392,14 +396,6 @@ wsrep_status_t galera_rollback(wsrep_t*                 gh,
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
     galera::TrxHandleMasterPtr victim(repl->get_local_trx(trx_id));
 
-    if (!victim)
-    {
-        log_debug << "trx to rollback " << trx_id << " not found";
-        return WSREP_OK;
-    }
-
-    TrxHandleLock victim_lock(*victim);
-
     /* Send the rollback fragment from a different context */
     galera::TrxHandleMasterPtr trx(repl->new_local_trx(trx_id));
 
@@ -419,13 +415,18 @@ wsrep_status_t galera_rollback(wsrep_t*                 gh,
     trx->set_state(TrxHandle::S_MUST_ABORT);
     trx->set_state(TrxHandle::S_ABORTING);
 
-    // Victim may already be in S_ABORTING state if it was BF aborted
-    // in pre commit.
-    if (victim->state() != TrxHandle::S_ABORTING)
+    if (victim)
     {
-        if (victim->state() != TrxHandle::S_MUST_ABORT)
-            victim->set_state(TrxHandle::S_MUST_ABORT);
-        victim->set_state(TrxHandle::S_ABORTING);
+        TrxHandleLock victim_lock(*victim);
+        // Victim may already be in S_ABORTING state
+        // if it was BF aborted in certify().
+        if (victim->state() != TrxHandle::S_ABORTING)
+        {
+            if (victim->state() != TrxHandle::S_MUST_ABORT)
+                victim->set_state(TrxHandle::S_MUST_ABORT);
+            victim->set_state(TrxHandle::S_ABORTING);
+        }
+        return repl->send(*trx, &meta);
     }
 
     return repl->send(*trx, &meta);
@@ -462,6 +463,60 @@ wsrep_status_t galera_assign_read_view(wsrep_t*           const  gh,
     return WSREP_NOT_IMPLEMENTED;
 }
 
+extern "C"
+wsrep_status_t galera_sync_wait(wsrep_t*      const wsrep,
+                                wsrep_gtid_t* const upto,
+                                int                 tout,
+                                wsrep_gtid_t* const gtid)
+{
+    assert(wsrep != 0);
+    assert(wsrep->ctx != 0);
+
+    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(wsrep->ctx));
+    wsrep_status_t retval;
+    try
+    {
+        retval = repl->sync_wait(upto, tout, gtid);
+    }
+    catch (std::exception& e)
+    {
+        log_warn << e.what();
+        retval = WSREP_CONN_FAIL;
+    }
+    catch (...)
+    {
+        log_fatal << "non-standard exception";
+        retval = WSREP_FATAL;
+    }
+    return retval;
+}
+
+static wsrep_status_t
+galera_terminate_trx(wsrep_t*           const gh,
+                     uint32_t           const flags,
+                     wsrep_trx_meta_t*  const meta)
+{
+    assert((flags & WSREP_FLAG_PA_UNSAFE));
+    assert(!(flags & WSREP_FLAG_TRX_START));
+    assert((flags & WSREP_FLAG_TRX_END) || (flags & WSREP_FLAG_ROLLBACK));
+
+    REPL_CLASS* const repl(static_cast< REPL_CLASS * >(gh->ctx));
+    galera::TrxHandleMasterPtr trx(repl->new_trx(meta->stid.node,
+                                                 meta->stid.trx));
+    TrxHandleLock lock(*trx);
+    trx->set_flags(TrxHandle::wsrep_flags_to_trx_flags(flags));
+    if ((flags & WSREP_FLAG_ROLLBACK))
+    {
+        trx->set_state(TrxHandle::S_MUST_ABORT);
+        trx->set_state(TrxHandle::S_ABORTING);
+    }
+    wsrep_status_t retval(repl->send(*trx, meta));
+    if (retval == WSREP_OK)
+    {
+        retval = galera_sync_wait(gh, NULL, -1, NULL);
+    }
+    return retval;
+}
 
 extern "C"
 wsrep_status_t galera_certify(wsrep_t*           const gh,
@@ -491,10 +546,28 @@ wsrep_status_t galera_certify(wsrep_t*           const gh,
     {
         if (meta != 0)
         {
-            meta->gtid       = WSREP_GTID_UNDEFINED;
-            meta->depends_on = WSREP_SEQNO_UNDEFINED;
-            meta->stid.node  = repl->source_id();
-            meta->stid.trx   = -1;
+            // If the caller passed a valid transaction id in meta,
+            // then send a commit / rollback fragment to terminate
+            // the transaction.
+
+            // Notice that we are making two assumptions here:
+            // 1) meta is treated as "in" parameter
+            // 2) (uint64_t)-1 means "undefined transaction ID"
+            // Rather than abusing galera_certify(), we should
+            // expose this functionality through dedicated API,
+            // and should be fixed next time we get a chance
+            // to update the wsrep API (codership/wsrep-API#40).
+            if (meta->stid.trx != (uint64_t)-1)
+            {
+                return galera_terminate_trx(gh, flags, meta);
+            }
+            else
+            {
+                meta->gtid       = WSREP_GTID_UNDEFINED;
+                meta->depends_on = WSREP_SEQNO_UNDEFINED;
+                meta->stid.node  = repl->source_id();
+                meta->stid.trx   = -1;
+            }
         }
         // no data to replicate
         return WSREP_OK;
@@ -546,7 +619,10 @@ wsrep_status_t galera_certify(wsrep_t*           const gh,
             {
                 assert(meta->gtid.seqno > 0);
                 assert(meta->gtid.seqno == trx.ts()->global_seqno());
-                assert(meta->depends_on == trx.ts()->depends_seqno());
+                // If TrxHandleSlave was queued its depends_seqno may be
+                // modified concurrently.
+                assert(trx.ts()->queued() ||
+                       meta->depends_on == trx.ts()->depends_seqno());
             }
             else
             {
@@ -762,6 +838,9 @@ wsrep_status_t galera_release(wsrep_t*            gh,
     assert(gh != 0);
     assert(gh->ctx != 0);
 
+    // A trx object was not created for this handle
+    if (not ws_handle->opaque) return WSREP_OK;
+
     REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
     TrxHandleMaster* txp(get_local_trx(repl, ws_handle, false));
 
@@ -899,14 +978,25 @@ wsrep_status_t galera_append_key(wsrep_t*           const gh,
 
     try
     {
+        int const proto_ver(repl->trx_proto_ver());
         TrxHandleLock lock(*trx);
-        for (size_t i(0); i < keys_num; ++i)
+
+        if (keys_num > 0)
         {
-            galera::KeyData k (repl->trx_proto_ver(),
-                               keys[i].key_parts,
-                               keys[i].key_parts_num,
-                               key_type,
-                               copy);
+            for (size_t i(0); i < keys_num; ++i)
+            {
+                galera::KeyData const k(proto_ver,
+                                        keys[i].key_parts,
+                                        keys[i].key_parts_num,
+                                        key_type,
+                                        copy);
+                gu_trace(trx->append_key(k));
+            }
+        }
+        else if (proto_ver >= 6)
+        {
+            /* Append server-level key (matches every trx)*/
+            galera::KeyData const k(proto_ver, key_type);
             gu_trace(trx->append_key(k));
         }
         retval = WSREP_OK;
@@ -986,36 +1076,6 @@ wsrep_status_t galera_append_data(wsrep_t*                const wsrep,
 
     return retval;
 }
-
-
-extern "C"
-wsrep_status_t galera_sync_wait(wsrep_t*      const wsrep,
-                                wsrep_gtid_t* const upto,
-                                int                 tout,
-                                wsrep_gtid_t* const gtid)
-{
-    assert(wsrep != 0);
-    assert(wsrep->ctx != 0);
-
-    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(wsrep->ctx));
-    wsrep_status_t retval;
-    try
-    {
-        retval = repl->sync_wait(upto, tout, gtid);
-    }
-    catch (std::exception& e)
-    {
-        log_warn << e.what();
-        retval = WSREP_CONN_FAIL;
-    }
-    catch (...)
-    {
-        log_fatal << "non-standard exception";
-        retval = WSREP_FATAL;
-    }
-    return retval;
-}
-
 
 extern "C"
 wsrep_status_t galera_last_committed_id(wsrep_t*      const wsrep,
@@ -1135,9 +1195,7 @@ wsrep_status_t galera_to_execute_start(wsrep_t*                const gh,
 
     wsrep_status_t retval;
 
-#ifdef NDEBUG
     try
-#endif // NDEBUG
     {
         TrxHandleLock lock(trx);
         for (size_t i(0); i < keys_num; ++i)
@@ -1183,7 +1241,6 @@ wsrep_status_t galera_to_execute_start(wsrep_t*                const gh,
             retval = repl->to_isolation_begin(trx, meta);
         }
     }
-#ifdef NDEBUG
     catch (gu::Exception& e)
     {
         log_error << e.what();
@@ -1203,12 +1260,12 @@ wsrep_status_t galera_to_execute_start(wsrep_t*                const gh,
         log_fatal << "non-standard exception";
         retval = WSREP_FATAL;
     }
-#endif // NDEBUG
 
     if (trx.ts() == NULL || trx.ts()->global_seqno() < 0)
     {
         // galera_to_execute_end() won't be called
         repl->discard_local_conn_trx(conn_id); // trx is not needed anymore
+        meta->gtid = WSREP_GTID_UNDEFINED;
     }
 
     return retval;
@@ -1420,7 +1477,7 @@ wsrep_seqno_t galera_pause (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_warn << "Node pause failed: " << e.what();
         return -e.get_errno();
     }
 }
@@ -1441,7 +1498,7 @@ wsrep_status_t galera_resume (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_error << "Node resume failed: " << e.what();
         return WSREP_NODE_FAIL;
     }
 }
@@ -1462,7 +1519,7 @@ wsrep_status_t galera_desync (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_warn << "Node desync failed: " << e.what();
         return WSREP_TRX_FAIL;
     }
 }
@@ -1483,7 +1540,7 @@ wsrep_status_t galera_resync (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_error << "Node resync failed: " << e.what();
         return WSREP_NODE_FAIL;
     }
 }
@@ -1595,4 +1652,157 @@ int wsrep_loader(wsrep_t *hptr)
     }
 
     return WSREP_OK;
+}
+
+extern "C"
+int wsrep_init_allowlist_service_v1(wsrep_allowlist_service_v1_t *allowlist_service)
+{
+    return gu::init_allowlist_service_v1(allowlist_service);
+}
+
+extern "C" void wsrep_deinit_allowlist_service_v1()
+{
+    gu::deinit_allowlist_service_v1();
+}
+
+extern "C"
+int wsrep_init_event_service_v1(wsrep_event_service_v1_t *event_service)
+{
+    return gu::EventService::init_v1(event_service);
+}
+
+extern "C" void wsrep_deinit_event_service_v1()
+{
+    gu::EventService::deinit_v1();
+}
+
+static int map_parameter_flags(int flags)
+{
+    int ret = 0;
+    if (flags & gu::Config::Flag::deprecated)
+      ret |= WSREP_PARAM_DEPRECATED;
+    if (flags & gu::Config::Flag::read_only)
+      ret |= WSREP_PARAM_READONLY;
+    if (flags & gu::Config::Flag::type_bool)
+      ret |= WSREP_PARAM_TYPE_BOOL;
+    if (flags & gu::Config::Flag::type_integer)
+      ret |= WSREP_PARAM_TYPE_INTEGER;
+    if (flags & gu::Config::Flag::type_double)
+      ret |= WSREP_PARAM_TYPE_DOUBLE;
+    if (flags & gu::Config::Flag::type_duration)
+      ret |= WSREP_PARAM_TYPE_DOUBLE;
+    return ret;
+}
+
+static int wsrep_parameter_init(wsrep_parameter& wsrep_param,
+                                const std::string& key,
+                                const gu::Config::Parameter& param)
+{
+    wsrep_param.flags = map_parameter_flags(param.flags());
+    wsrep_param.name  = key.c_str();
+    const char* ret = "";
+    switch (param.flags() & gu::Config::Flag::type_mask)
+    {
+    case gu::Config::Flag::type_bool:
+        ret = gu_str2bool(param.value().c_str(), &wsrep_param.value.as_bool);
+        break;
+    case gu::Config::Flag::type_integer:
+    {
+        long long tmp;
+        ret = gu_str2ll(param.value().c_str(), &tmp);
+        wsrep_param.value.as_integer = tmp;
+        break;
+    }
+    case gu::Config::Flag::type_double:
+        ret = gu_str2dbl(param.value().c_str(), &wsrep_param.value.as_double);
+        break;
+    case gu::Config::Flag::type_duration:
+    {
+        try
+        {
+            // durations are mapped to doubles
+            wsrep_param.value.as_double
+                = to_double(gu::datetime::Period(param.value()));
+        }
+        catch (...)
+        {
+            assert(0);
+            return 1;
+        }
+        break;
+    }
+    default:
+        assert((param.flags() & gu::Config::Flag::type_mask) == 0);
+        wsrep_param.value.as_string = param.value().c_str();
+    }
+
+    if (*ret != '\0')
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+static wsrep_status_t get_parameters(wsrep_t* gh,
+                                     wsrep_get_parameters_cb callback,
+                                     void* context)
+{
+    assert(gh != 0);
+    assert(gh->ctx != 0);
+    REPL_CLASS * repl(reinterpret_cast< REPL_CLASS * >(gh->ctx));
+    const gu::Config& config(repl->params());
+    for (auto &i : config)
+    {
+        const std::string& key(i.first);
+        const gu::Config::Parameter& param(i.second);
+        if (!param.is_hidden())
+        {
+            wsrep_parameter arg;
+            if (wsrep_parameter_init(arg, key, param) ||
+                (callback(&arg, context) != WSREP_OK))
+            {
+                log_error << "Failed to initialize parameter '" << key
+                          << "', value " << param.value()
+                          << " , flags (" << gu::Config::Flag::to_string(param.flags())
+                          << ")";
+                return WSREP_FATAL;
+            }
+        }
+    }
+
+    return WSREP_OK;
+}
+
+extern "C"
+int wsrep_init_config_service_v1(wsrep_config_service_v1_t *config_service)
+{
+    config_service->get_parameters = get_parameters;
+    // Deprecation checks will be done by application which uses
+    // the service.
+    gu::Config::disable_deprecation_check();
+    return WSREP_OK;
+}
+
+extern "C"
+void wsrep_deinit_config_service_v1()
+{
+    gu::Config::enable_deprecation_check();
+}
+
+/*
+ * This function may be called from signal handler, so make sure that
+ * only 'safe' system calls and library functions are used. See
+ * https://pubs.opengroup.org/onlinepubs/009695399/functions/xsh_chap02_04.html
+ */
+extern "C" enum wsrep_node_isolation_result
+wsrep_node_isolation_mode_set_v1(enum wsrep_node_isolation_mode mode)
+{
+    if (mode < WSREP_NODE_ISOLATION_NOT_ISOLATED
+        || mode > WSREP_NODE_ISOLATION_FORCE_DISCONNECT)
+    {
+        return WSREP_NODE_ISOLATION_INVALID_VALUE;
+    }
+    gu::gu_asio_node_isolation_mode = mode;
+    return WSREP_NODE_ISOLATION_SUCCESS;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2016 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2020 Codership Oy <info@codership.com>
  *
  * $Id$
  */
@@ -93,17 +93,21 @@ gcs_node_handle_act_frag (gcs_node_t*           node,
                           struct gcs_act*       act,
                           bool                  local)
 {
+    ssize_t ret;
+
     if (gu_likely(GCS_ACT_SERVICE != frg->act_type)) {
-        return gcs_defrag_handle_frag (&node->app, frg, act, local);
+        ret = gcs_defrag_handle_frag (&node->app, frg, act, local);
     }
     else if (GCS_ACT_SERVICE == frg->act_type) {
-        return gcs_defrag_handle_frag (&node->oob, frg, act, local);
+        ret = gcs_defrag_handle_frag (&node->oob, frg, act, local);
     }
     else {
         gu_warn ("Unrecognised action type: %d", frg->act_type);
         assert(0);
-        return -EPROTO;
+        ret = -EPROTO;
     }
+
+    return ret;
 }
 
 static inline void
@@ -111,9 +115,11 @@ gcs_node_set_last_applied (gcs_node_t* node, gcs_seqno_t seqno)
 {
     assert(seqno >= 0);
     if (gu_unlikely(seqno <= node->last_applied)) {
-        gu_warn ("Received bogus LAST message: %lld from node %s, "
-                 "expected > %lld. Ignoring.",
-                 (long long)seqno, node->id, (long long)node->last_applied);
+        if (node->count_last_applied) {
+            gu_warn("Received bogus LAST message: %lld from node %s, "
+                    "expected > %lld. Ignoring.",
+                    (long long)seqno, node->id, (long long)node->last_applied);
+        }
     }
     else {
         node->last_applied = seqno;
@@ -121,7 +127,8 @@ gcs_node_set_last_applied (gcs_node_t* node, gcs_seqno_t seqno)
 }
 
 extern void
-gcs_node_set_vote (gcs_node_t* node, gcs_seqno_t seqno, int64_t vote);
+gcs_node_set_vote (gcs_node_t* node, gcs_seqno_t seqno, int64_t vote,
+                   int gcs_ptoto);
 
 static inline gcs_seqno_t
 gcs_node_get_last_applied (gcs_node_t* node)

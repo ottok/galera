@@ -37,6 +37,7 @@ namespace galera
         };
 
         static const char* const TRIVIAL_SST;
+        static const char* const NO_SST;
 
         typedef enum
         {
@@ -145,8 +146,6 @@ namespace galera
         virtual void cancel_seqnos(wsrep_seqno_t seqno_l,
                                    wsrep_seqno_t seqno_g) = 0;
         virtual bool corrupt() const = 0;
-
-    protected:
 
         static void register_params(gu::Config&);
 

@@ -12,6 +12,7 @@
 #include "gu_macros.h"
 #include <algorithm>
 #include <set>
+#include <iostream> // std::cerr
 
 #include <boost/bind.hpp>
 
@@ -77,10 +78,16 @@ private:
     const gcomm::UUID& uuid_;
 };
 
-static bool UUID_fixed_part_pred(const gcomm::NodeList::value_type& lhs,
-                                 const gcomm::NodeList::value_type& rhs)
+static bool UUID_fixed_part_cmp_equal(const gcomm::NodeList::value_type& lhs,
+                                      const gcomm::NodeList::value_type& rhs)
 {
     return lhs.first.fixed_part_matches(rhs.first);
+}
+
+static bool UUID_fixed_part_cmp_intersection(const gcomm::UUID& lhs,
+                                             const gcomm::UUID& rhs)
+{
+    return lhs.fixed_part_matches(rhs) ? false : lhs < rhs;
 }
 
 // Return max to seq found from states, -1 if states is empty
@@ -176,6 +183,21 @@ void gcomm::pc::Proto::send_state()
     }
 }
 
+static std::string send_error_str(int const err)
+{
+    std::ostringstream os;
+    switch (err)
+    {
+    case 0: os << "Success"; break;
+    case EAGAIN:
+        os << "Cluster configuration change in progress or flow control active";
+        break;
+    case ENOTCONN: os << "Not connected to the cluster"; break;
+    default: os << "Unknown error: " << err; break;
+    }
+    return os.str();
+}
+
 int gcomm::pc::Proto::send_install(bool bootstrap, int weight)
 {
     gcomm_assert(bootstrap == false || weight == -1);
@@ -220,10 +242,10 @@ int gcomm::pc::Proto::send_install(bool bootstrap, int weight)
     serialize(pci, buf);
     Datagram dg(buf);
     int ret = send_down(dg, ProtoDownMeta());
-    if (ret != 0)
+    if (ret)
     {
-        log_warn << self_id() << " sending install message failed: "
-                 << strerror(ret);
+        log_info << "sending install message for new primary component failed: "
+                 << send_error_str(ret) << ", will retry in next configuration";
     }
     return ret;
 }
@@ -294,7 +316,7 @@ void gcomm::pc::Proto::deliver_view(bool bootstrap)
             if (rst_view_->id().seq() == max_view_seqno &&
                 v.members().size() == rst_view_->members().size() &&
                 std::equal(v.members().begin(), v.members().end(),
-                           rst_view_->members().begin(), UUID_fixed_part_pred))
+                           rst_view_->members().begin(), UUID_fixed_part_cmp_equal))
             {
                 log_info << "promote to primary component";
                 // All of the nodes are in non-primary so we need to bootstrap.
@@ -344,18 +366,13 @@ void gcomm::pc::Proto::shift_to(const State s)
     // State graph
     static const bool allowed[S_MAX][S_MAX] = {
 
-        // Closed
-        { false, false,  false, false, false, true },
-        // States exch
-        { true,  false, true,  false, true,  true  },
-        // Install
-        { true,  false, false, true,  true,  true  },
-        // Prim
-        { true,  false, false, false, true,  true  },
-        // Trans
-        { true,  true,  false, false, false, true  },
-        // Non-prim
-        { true,  false,  false, true, true,  true  }
+        // Cl     S-E    IN     P      Trans  N-P
+        {  false, false, false, false, false, true  }, // Closed
+        {  true,  false, true,  false, true,  true  }, // States exch
+        {  true,  false, false, true,  true,  true  }, // Install
+        {  true,  false, false, false, true,  true  }, // Prim
+        {  true,  true,  false, false, false, true  }, // Trans
+        {  true,  false, false,  true, true,  true  }  // Non-prim
     };
 
 
@@ -499,20 +516,40 @@ static bool have_weights(const gcomm::NodeList& node_list,
     return true;
 }
 
+static bool node_list_intersection_comp(const gcomm::NodeList::value_type& vt1,
+                                        const gcomm::NodeList::value_type& vt2)
+{
+    return (vt1.first < vt2.first);
+}
+
+static gcomm::NodeList node_list_intersection(const gcomm::NodeList& nl1,
+                                              const gcomm::NodeList& nl2)
+{
+    gcomm::NodeList ret;
+    std::set_intersection(nl1.begin(), nl1.end(), nl2.begin(), nl2.end(),
+                          std::inserter(ret, ret.begin()),
+                          node_list_intersection_comp);
+    return ret;
+}
 
 bool gcomm::pc::Proto::have_quorum(const View& view, const View& pc_view) const
 {
+    // Compare only against members and left which were part of the pc_view.
+    gcomm::NodeList memb_intersection(
+        node_list_intersection(view.members(), pc_view.members()));
+    gcomm::NodeList left_intersection(
+        node_list_intersection(view.left(), pc_view.members()));
     if (have_weights(view.members(), instances_) &&
         have_weights(view.left(), instances_)    &&
         have_weights(pc_view.members(), instances_))
     {
-        return (weighted_sum(view.members(), instances_) * 2
-                + weighted_sum(view.left(), instances_) >
+        return (weighted_sum(memb_intersection, instances_) * 2
+                + weighted_sum(left_intersection, instances_) >
                 weighted_sum(pc_view.members(), instances_));
     }
     else
     {
-        return (view.members().size()*2 + view.left().size() >
+        return (memb_intersection.size()*2 + left_intersection.size() >
                 pc_view.members().size());
     }
 }
@@ -520,17 +557,22 @@ bool gcomm::pc::Proto::have_quorum(const View& view, const View& pc_view) const
 
 bool gcomm::pc::Proto::have_split_brain(const View& view) const
 {
+    // Compare only against members and left which were part of the pc_view.
+    gcomm::NodeList memb_intersection(
+        node_list_intersection(view.members(), pc_view_.members()));
+    gcomm::NodeList left_intersection(
+        node_list_intersection(view.left(), pc_view_.members()));
     if (have_weights(view.members(), instances_)  &&
         have_weights(view.left(), instances_)     &&
         have_weights(pc_view_.members(), instances_))
     {
-        return (weighted_sum(view.members(), instances_) * 2
-                + weighted_sum(view.left(), instances_) ==
+        return (weighted_sum(memb_intersection, instances_) * 2
+                + weighted_sum(left_intersection, instances_) ==
                 weighted_sum(pc_view_.members(), instances_));
     }
     else
     {
-        return (view.members().size()*2 + view.left().size() ==
+        return (memb_intersection.size()*2 + left_intersection.size() ==
                 pc_view_.members().size());
     }
 }
@@ -546,20 +588,20 @@ void gcomm::pc::Proto::handle_trans(const View& view)
     log_debug << self_id() << " \n\n current view " << current_view_
               << "\n\n next view " << view
               << "\n\n pc view " << pc_view_;
-
+    log_debug << *this;
     if (have_quorum(view, pc_view_) == false)
     {
         if (closing_ == false && ignore_sb_ == true && have_split_brain(view))
         {
             // configured to ignore split brain
-            log_warn << "Ignoring possible split-brain "
+            log_info << "Ignoring possible split-brain "
                      << "(allowed by configuration) from view:\n"
                      << current_view_ << "\nto view:\n" << view;
         }
         else if (closing_ == false && ignore_quorum_ == true)
         {
             // configured to ignore lack of quorum
-            log_warn << "Ignoring lack of quorum "
+            log_info << "Ignoring lack of quorum "
                      << "(allowed by configuration) from view:\n"
                      << current_view_ << "\nto view:\n" << view;
         }
@@ -937,7 +979,8 @@ bool gcomm::pc::Proto::is_prim() const
 
         if (last_prim_uuids.empty() == true)
         {
-            log_warn << "no nodes coming from prim view, prim not possible";
+            log_info << "No nodes coming from primary view, "
+                     << "primary view is not possible";
             return false;
         }
 
@@ -976,7 +1019,8 @@ bool gcomm::pc::Proto::is_prim() const
         std::set<UUID> intersection;
         set_intersection(greatest_view.begin(), greatest_view.end(),
                          present.begin(), present.end(),
-                         inserter(intersection, intersection.begin()));
+                         inserter(intersection, intersection.begin()),
+                         UUID_fixed_part_cmp_intersection);
         log_debug << self_id()
                   << " intersection size " << intersection.size()
                   << " greatest view size " << greatest_view.size();
@@ -1613,7 +1657,9 @@ int gcomm::pc::Proto::handle_down(Datagram& dg, const ProtoDownMeta& dm)
     }
     else if (ret != EAGAIN)
     {
-        log_warn << "Proto::handle_down: " << strerror(ret);
+        log_warn << "Got unexpected error code from send in "
+                    "pc::Proto::handle_down(): "
+                 << ret;
     }
 
     pop_header(um, dg);

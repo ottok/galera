@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2019 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2020 Codership Oy <info@codership.com>
  *
  * $Id$
  */
@@ -35,6 +35,7 @@ typedef enum gcs_group_state
     GCS_GROUP_WAIT_STATE_UUID,
     GCS_GROUP_WAIT_STATE_MSG,
     GCS_GROUP_PRIMARY,
+    GCS_GROUP_INCONSISTENT,
     GCS_GROUP_STATE_MAX
 }
 gcs_group_state_t;
@@ -108,6 +109,15 @@ extern int
 gcs_group_init_history (gcs_group_t*    group,
                         const gu::GTID& position);
 
+#ifdef GCS_CORE_TESTING
+/*!
+ * Free group nodes. Should not be used directly, exposed only for
+ * unit tests.
+ */
+extern void
+group_nodes_free (gcs_group_t* group);
+#endif // GCS_CORE_TESTING
+
 /*!
  * Free group resources
  */
@@ -167,7 +177,7 @@ gcs_group_handle_act_msg (gcs_group_t*          const group,
                           struct gcs_act_rcvd*  const rcvd,
                           bool commonly_supported_version)
 {
-    long const sender_idx = msg->sender_idx;
+    int  const sender_idx = msg->sender_idx;
     bool const local      = (sender_idx == group->my_idx);
     ssize_t ret;
 
@@ -189,6 +199,7 @@ gcs_group_handle_act_msg (gcs_group_t*          const group,
         assert (ret == rcvd->act.buf_len);
 
         rcvd->act.type = frg->act_type;
+        rcvd->sender_idx = sender_idx;
 
         if (gu_likely(GCS_ACT_WRITESET  == rcvd->act.type &&
                       GCS_GROUP_PRIMARY == group->state   &&

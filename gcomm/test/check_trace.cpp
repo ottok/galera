@@ -11,6 +11,7 @@
 #include "check_trace.hpp"
 #include "gcomm/conf.hpp"
 #include "gu_asio.hpp" // gu::ssl_register_params()
+#include <iostream> // std::cerr
 
 using namespace std;
 using namespace gu;
@@ -25,6 +26,12 @@ struct CheckTraceConfInit
     }
 };
 
+extern "C" void check_trace_log_cb(int severity, const char* msg)
+{
+    std::cerr << gu::datetime::Date::monotonic() << ": " << msg << "\n";
+}
+
+
 // This is to avoid static initialization fiasco with gcomm::Conf static members
 // Ideally it is the latter which should be wrapped in a function, but, unless
 // this is used to initialize another static object, it should be fine.
@@ -35,6 +42,17 @@ gu::Config& check_trace_conf()
 
     return conf;
 }
+
+std::unique_ptr<Protonet> DummyTransport::net_;
+Protonet& DummyTransport::get_net()
+{
+    // Unit tests are single threaded, no need to worry about thread
+    // synchronization here.
+    if (not net_)
+        net_ = std::unique_ptr<Protonet>(Protonet::create(check_trace_conf()));;
+    return *net_;
+}
+
 
 ostream& gcomm::operator<<(ostream& os, const TraceMsg& msg)
 {
@@ -264,6 +282,13 @@ void gcomm::PropagationMatrix::propagate_until_cvi(bool handle_timers)
         if (all_in == false && handle_timers == true)
         {
             expire_timers();
+        }
+        if (handle_timers)
+        {
+            // Assume that time progresses in 50 millisecond intervals
+            // and that is fine enough granularity for all tests
+            // which deal with timers.
+            gu::datetime::SimClock::inc_time(50*gu::datetime::MSec);
         }
     }
     while (all_in == false);

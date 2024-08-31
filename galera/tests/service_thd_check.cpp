@@ -1,14 +1,14 @@
 /*
- * Copyright (C) 2010-2017 Codership Oy <info@codership.com>
+ * Copyright (C) 2010-2021 Codership Oy <info@codership.com>
  */
-#define __STDC_FORMAT_MACROS
 
 #include "../src/galera_service_thd.hpp"
 #include "../src/replicator_smm.hpp"
+
+#include "gu_inttypes.hpp"
+
 #include <check.h>
 #include <errno.h>
-
-#include <inttypes.h>
 
 namespace
 {
@@ -38,7 +38,10 @@ namespace
             conf_   (),
             init_   (conf_, NULL, NULL),
             gcache_setup_(conf_),
-            gcache_ (conf_, "."),
+            gcache_pcb_
+            (galera::ProgressCallback<int64_t>(WSREP_MEMBER_UNDEFINED,
+                                               WSREP_MEMBER_UNDEFINED)),
+            gcache_ (&gcache_pcb_, conf_, "."),
             gcs_    (conf_, gcache_)
         {}
 
@@ -50,6 +53,7 @@ namespace
         gu::Config       conf_;
         galera::ReplicatorSMM::InitConfig init_;
         GCache_setup     gcache_setup_;
+        galera::ProgressCallback<int64_t> gcache_pcb_;
         gcache::GCache   gcache_;
         galera::DummyGcs gcs_;
     };
@@ -61,7 +65,7 @@ START_TEST(service_thd1)
 {
     TestEnv env;
     ServiceThd* thd = new ServiceThd(env.gcs(), env.gcache());
-    fail_if (thd == 0);
+    ck_assert(thd != 0);
     delete thd;
 }
 END_TEST
@@ -76,7 +80,7 @@ START_TEST(service_thd2)
     DummyGcs& conn(env.gcs());
     ServiceThd* thd = new ServiceThd(conn, env.gcache());
     gu::UUID const state_uuid(NULL, 0);
-    fail_if (thd == 0);
+    ck_assert(thd != 0);
 
     conn.set_last_applied(gu::GTID(state_uuid, 0));
 
@@ -84,24 +88,24 @@ START_TEST(service_thd2)
     thd->report_last_committed (seqno);
     thd->flush(state_uuid);
     WAIT_FOR(conn.last_applied() == seqno);
-    fail_if (conn.last_applied() != seqno,
-             "seqno = %" PRId64 ", expected %" PRId64, conn.last_applied(),
-             seqno);
+    ck_assert_msg(conn.last_applied() == seqno,
+                  "seqno = %" PRId64 ", expected %" PRId64,
+                  conn.last_applied(), seqno);
 
     seqno = 5;
     thd->report_last_committed (seqno);
     thd->flush(state_uuid);
     WAIT_FOR(conn.last_applied() == seqno);
-    fail_if (conn.last_applied() != seqno,
-             "seqno = %" PRId64 ", expected %" PRId64, conn.last_applied(),
-             seqno);
+    ck_assert_msg(conn.last_applied() == seqno,
+                  "seqno = %" PRId64 ", expected %" PRId64,
+                  conn.last_applied(), seqno);
 
     thd->report_last_committed (3);
     thd->flush(state_uuid);
     WAIT_FOR(conn.last_applied() == seqno);
-    fail_if (conn.last_applied() != seqno,
-             "seqno = %" PRId64 ", expected %" PRId64, conn.last_applied(),
-             seqno);
+    ck_assert_msg(conn.last_applied() == seqno,
+                  "seqno = %" PRId64 ", expected %" PRId64,
+                  conn.last_applied(), seqno);
 
     thd->reset();
 
@@ -109,9 +113,9 @@ START_TEST(service_thd2)
     thd->report_last_committed (seqno);
     thd->flush(state_uuid);
     WAIT_FOR(conn.last_applied() == seqno);
-    fail_if (conn.last_applied() != seqno,
-             "seqno = %" PRId64 ", expected %" PRId64, conn.last_applied(),
-             seqno);
+    ck_assert_msg(conn.last_applied() == seqno,
+                  "seqno = %" PRId64 ", expected %" PRId64,
+                  conn.last_applied(), seqno);
 
     delete thd;
 }
@@ -121,7 +125,7 @@ START_TEST(service_thd3)
 {
     TestEnv env;
     ServiceThd* thd = new ServiceThd(env.gcs(), env.gcache());
-    fail_if (thd == 0);
+    ck_assert(thd != 0);
     // so far for empty GCache the following should be a noop.
     thd->release_seqno(-1);
     thd->release_seqno(2345);
@@ -139,6 +143,7 @@ Suite* service_thd_suite()
     tcase_add_test  (tc, service_thd1);
     tcase_add_test  (tc, service_thd2);
     tcase_add_test  (tc, service_thd3);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase (s, tc);
 
     return s;

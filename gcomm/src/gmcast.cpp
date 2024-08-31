@@ -37,9 +37,9 @@ static bool check_tcp_uri(const gu::URI& uri)
             uri.get_scheme() == gu::scheme::ssl);
 }
 
-static std::string get_scheme(bool use_ssl)
+static std::string get_scheme(bool use_ssl, bool dynamic_socket)
 {
-    if (use_ssl == true)
+    if (use_ssl == true && not dynamic_socket)
     {
         return gu::scheme::ssl;
     }
@@ -81,13 +81,21 @@ gcomm::GMCast::GMCast(Protonet& net, const gu::URI& uri,
                           param<int>(conf_, uri, Conf::GMCastSegment, "0"),
                           0, 255)),
     my_uuid_      (my_uuid ? *my_uuid : UUID(0, 0)),
+    dynamic_socket_ (conf_.has(gu::conf::socket_dynamic) ?
+                     param<bool>(conf_, uri, gu::conf::socket_dynamic,
+                                 "false") :
+                     false),
+#ifdef GALERA_HAVE_SSL
     use_ssl_      (param<bool>(conf_, uri, gu::conf::use_ssl, "false")),
+#else
+    use_ssl_(),
+#endif // GALERA_HAVE_SSL
     // @todo: technically group name should be in path component
     group_name_   (param<std::string>(conf_, uri, Conf::GMCastGroup, "")),
     listen_addr_  (
         param<std::string>(
             conf_, uri, Conf::GMCastListenAddr,
-            get_scheme(use_ssl_) + "://0.0.0.0")), // how to make it IPv6 safe?
+            get_scheme(use_ssl_, dynamic_socket_) + "://0.0.0.0")), // how to make it IPv6 safe?
     initial_addrs_(),
     mcast_addr_   (param<std::string>(conf_, uri, Conf::GMCastMCastAddr, "")),
     bind_ip_      (""),
@@ -95,7 +103,7 @@ gcomm::GMCast::GMCast(Protonet& net, const gu::URI& uri,
                        Conf::GMCastMCastTTL,
                        param<int>(conf_, uri, Conf::GMCastMCastTTL, "1"),
                        1, 256)),
-    listener_     (0),
+    listener_     (),
     mcast_        (),
     pending_addrs_(),
     remote_addrs_ (),
@@ -118,7 +126,7 @@ gcomm::GMCast::GMCast(Protonet& net, const gu::URI& uri,
         param<int>(conf_, uri,
                    Conf::GMCastMaxInitialReconnectAttempts,
                    gu::to_string(max_retry_cnt_))),
-    next_check_   (gu::datetime::Date::now())
+    next_check_   (gu::datetime::Date::monotonic())
 {
     log_info << "GMCast version " << version_;
 
@@ -143,7 +151,7 @@ gcomm::GMCast::GMCast(Protonet& net, const gu::URI& uri,
     catch (gu::Exception&)
     {
         /* most probably no scheme, try to append one and see if it succeeds */
-        listen_addr_ = uri_string(get_scheme(use_ssl_), listen_addr_);
+        listen_addr_ = uri_string(get_scheme(use_ssl_, dynamic_socket_), listen_addr_);
         gu_trace(gu::URI uri(listen_addr_));
     }
 
@@ -188,11 +196,10 @@ gcomm::GMCast::GMCast(Protonet& net, const gu::URI& uri,
 
     listen_addr_ = gu::net::resolve(listen_addr_).to_string();
     // resolving sets scheme to tcp, have to rewrite for ssl
-    if (use_ssl_ == true)
+    if (use_ssl_ == true && not dynamic_socket_)
     {
         listen_addr_.replace(0, 3, gu::scheme::ssl);
     }
-
     std::set<std::string>::iterator iaself(initial_addrs_.find(listen_addr_));
     if (iaself != initial_addrs_.end())
     {
@@ -205,7 +212,7 @@ gcomm::GMCast::GMCast(Protonet& net, const gu::URI& uri,
     {
         try
         {
-            port = uri_.get_option(Conf::GMCastMCastPort);
+            port = param<std::string>(conf_, uri_, Conf::GMCastMCastPort, port);
         }
         catch (gu::NotFound&) {}
 
@@ -274,7 +281,7 @@ void gcomm::GMCast::set_initial_addr(const gu::URI& uri)
             }
         }
 
-        std::string initial_uri = uri_string(get_scheme(use_ssl_), host, port);
+        std::string initial_uri = uri_string(get_scheme(use_ssl_, dynamic_socket_), host, port);
         std::string initial_addr;
         try
         {
@@ -285,9 +292,8 @@ void gcomm::GMCast::set_initial_addr(const gu::URI& uri)
             log_warn << "Failed to resolve " << initial_uri;
             continue;
         }
-
         // resolving sets scheme to tcp, have to rewrite for ssl
-        if (use_ssl_ == true)
+        if (use_ssl_ == true && not dynamic_socket_)
         {
             initial_addr.replace(0, 3, gu::scheme::ssl);
         }
@@ -373,8 +379,7 @@ void gcomm::GMCast::close(bool force)
 
     gcomm_assert(listener_ != 0);
     listener_->close();
-    delete listener_;
-    listener_ = 0;
+    listener_.reset();
 
     segment_map_.clear();
     for (ProtoMap::iterator
@@ -444,8 +449,8 @@ void gcomm::GMCast::blacklist(const gmcast::Proto* proto)
     pending_addrs_.erase(proto->remote_addr());
     addr_blacklist_.insert(std::make_pair(
                                proto->remote_addr(),
-                               AddrEntry(gu::datetime::Date::now(),
-                                         gu::datetime::Date::now(),
+                               AddrEntry(gu::datetime::Date::monotonic(),
+                                         gu::datetime::Date::monotonic(),
                                          proto->remote_uuid())));
 }
 
@@ -480,7 +485,8 @@ bool gcomm::GMCast::is_not_own_and_duplicate_exists(
 void gcomm::GMCast::erase_proto(gmcast::ProtoMap::iterator i)
 {
     Proto* p(ProtoMap::value(i));
-    std::set<Socket*>::iterator si(relay_set_.find(p->socket().get()));
+    RelayEntry e(p, p->socket().get());
+    RelaySet::iterator si(relay_set_.find(e));
     if (si != relay_set_.end())
     {
         relay_set_.erase(si);
@@ -625,15 +631,14 @@ void gcomm::GMCast::gmcast_forget(const UUID& uuid,
                     erase_proto(pi);
                 }
             }
-            ae.set_max_retries(0);
-            ae.set_retry_cnt(1);
-            gu::datetime::Date now(gu::datetime::Date::now());
+            disable_reconnect(*ai);
+            gu::datetime::Date now(gu::datetime::Date::monotonic());
             // Don't reduce next reconnect time if it is set greater than
             // requested
             if ((now + wait_period > ae.next_reconnect()) ||
                 (ae.next_reconnect() == gu::datetime::Date::max()))
             {
-                ae.set_next_reconnect(gu::datetime::Date::now() + wait_period);
+                ae.set_next_reconnect(gu::datetime::Date::monotonic() + wait_period);
             }
             else
             {
@@ -702,28 +707,23 @@ void gcomm::GMCast::handle_established(Proto* est)
         remote_addrs_.erase(i);
         i = remote_addrs_.insert_unique(
             make_pair(est->remote_addr(),
-                      AddrEntry(gu::datetime::Date::now(),
-                                gu::datetime::Date::now(),
+                      AddrEntry(gu::datetime::Date::monotonic(),
+                                gu::datetime::Date::monotonic(),
                                 est->remote_uuid())));
     }
 
     if (AddrList::value(i).retry_cnt() >
         AddrList::value(i).max_retries())
     {
-        log_warn << "discarding established (time wait) "
-                 << est->remote_uuid()
-                 << " (" << est->remote_addr() << ") ";
+        log_info << "discarding connection " << est->remote_uuid() << " ("
+                 << est->remote_addr() << ") "
+                 << "after " << AddrList::value(i).retry_cnt() << " retries";
         erase_proto(proto_map_->find(est->socket()->id()));
         update_addresses();
         return;
     }
 
-    // send_up(Datagram(), p->remote_uuid());
-
-    // init retry cnt to -1 to avoid unnecessary logging at first attempt
-    // max retries will be readjusted in handle stable view
-    AddrList::value(i).set_retry_cnt(-1);
-    AddrList::value(i).set_max_retries(max_initial_reconnect_attempts_);
+    enable_reconnect(*i);
 
     // Cleanup all previously established entries with same
     // remote uuid. It is assumed that the most recent connection
@@ -810,7 +810,7 @@ void gcomm::GMCast::handle_failed(Proto* failed)
             AddrEntry& ae(AddrList::value(i));
             ae.set_retry_cnt(ae.retry_cnt() + 1);
 
-            gu::datetime::Date rtime = gu::datetime::Date::now() + gu::datetime::Period("PT1S");
+            gu::datetime::Date rtime = gu::datetime::Date::monotonic() + gu::datetime::Period("PT1S");
             log_debug << self_string()
                       << " setting next reconnect time to "
                       << rtime << " for " << remote_addr;
@@ -850,8 +850,8 @@ void gcomm::GMCast::insert_address (const std::string& addr,
     }
 
     if (alist.insert(make_pair(addr,
-                               AddrEntry(gu::datetime::Date::now(),
-                                         gu::datetime::Date::now(), uuid))).second == false)
+                               AddrEntry(gu::datetime::Date::monotonic(),
+                                         gu::datetime::Date::monotonic(), uuid))).second == false)
     {
         log_warn << "Duplicate entry: " << addr;
     }
@@ -964,15 +964,11 @@ void gcomm::GMCast::update_addresses()
 
                     AddrEntry& ae(AddrList::value(pi));
 
-                    // init retry cnt to -1 to avoid unnecessary logging
-                    // at first attempt
-                    // max retries will be readjusted in handle stable view
-                    ae.set_retry_cnt(-1);
-                    ae.set_max_retries(max_initial_reconnect_attempts_);
+                    enable_reconnect(*pi);
 
                     // Add some randomness for first reconnect to avoid
                     // simultaneous connects
-                    gu::datetime::Date rtime(gu::datetime::Date::now());
+                    gu::datetime::Date rtime(gu::datetime::Date::monotonic());
 
                     rtime = rtime + ::rand() % (100*gu::datetime::MSec);
                     ae.set_next_reconnect(rtime);
@@ -991,25 +987,25 @@ void gcomm::GMCast::update_addresses()
     if (mcast_)
     {
         log_debug << mcast_addr_;
-        local_segment.push_back(mcast_.get());
+        local_segment.push_back(RelayEntry(0, mcast_.get()));
     }
 
     self_index_ = 0;
     for (ProtoMap::const_iterator i(proto_map_->begin()); i != proto_map_->end();
          ++i)
     {
-        const Proto& p(*ProtoMap::value(i));
+        Proto* p(ProtoMap::value(i));
 
-        log_debug << "Proto: " << p;
+        log_debug << "Proto: " << *p;
 
-        if (p.remote_segment() == segment_)
+        if (p->remote_segment() == segment_)
         {
-            if (p.state() == Proto::S_OK &&
-                (p.mcast_addr() == "" ||
-                 p.mcast_addr() != mcast_addr_))
+            if (p->state() == Proto::S_OK &&
+                (p->mcast_addr() == "" ||
+                 p->mcast_addr() != mcast_addr_))
             {
-                local_segment.push_back(p.socket().get());
-                if (p.remote_uuid() < uuid())
+                local_segment.push_back(RelayEntry(p, p->socket().get()));
+                if (p->remote_uuid() < uuid())
                 {
                     ++self_index_;
                 }
@@ -1017,10 +1013,10 @@ void gcomm::GMCast::update_addresses()
         }
         else
         {
-            if (p.state() == Proto::S_OK)
+            if (p->state() == Proto::S_OK)
             {
-                Segment& remote_segment(segment_map_[p.remote_segment()]);
-                remote_segment.push_back(p.socket().get());
+                Segment& remote_segment(segment_map_[p->remote_segment()]);
+                remote_segment.push_back(RelayEntry(p, p->socket().get()));
             }
         }
     }
@@ -1039,7 +1035,7 @@ void gcomm::GMCast::reconnect()
 
     /* Loop over known remote addresses and connect if proto entry
      * does not exist */
-    gu::datetime::Date now = gu::datetime::Date::now();
+    gu::datetime::Date now = gu::datetime::Date::monotonic();
     AddrList::iterator i, i_next;
 
     for (i = pending_addrs_.begin(); i != pending_addrs_.end(); i = i_next)
@@ -1105,6 +1101,30 @@ void gcomm::GMCast::reconnect()
     }
 }
 
+void gcomm::GMCast::disable_reconnect(AddrList::value_type& entry)
+{
+    log_debug << "Disabling reconnect for " << entry.first;
+    entry.second.set_max_retries(0);
+    entry.second.set_retry_cnt(1);
+}
+
+void gcomm::GMCast::enable_reconnect(AddrList::value_type& entry)
+{
+    if (entry.second.retry_cnt() == -1)
+    {
+        return;
+    }
+    log_debug << "Enabling reconnect for " << entry.first;
+    /* Initialize retry cnt to -1 in order to avoid unnecessary logging
+     * at the first connect attempt.
+     * Initial reconnect attempts is limited to terminate reconnection
+     * attempts early if the peer becomes unresponsive. The max retries
+     * is adjusted into higher value in handle_stable_view() once it is
+     * known that the peer has become part of the stable view. */
+    entry.second.set_retry_cnt(-1);
+    entry.second.set_max_retries(max_initial_reconnect_attempts_);
+}
+
 namespace
 {
     class CmpUuidCounts
@@ -1158,27 +1178,44 @@ void gcomm::GMCast::check_liveness()
     std::set<UUID> live_uuids;
 
     // iterate over proto map and mark all timed out entries as failed
-    gu::datetime::Date now(gu::datetime::Date::now());
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
     for (ProtoMap::iterator i(proto_map_->begin()); i != proto_map_->end(); )
     {
+        // Store next iterator into temporary, handle_failed() may remove
+        // the entry proto_map_.
         ProtoMap::iterator i_next(i);
         ++i_next;
         Proto* p(ProtoMap::value(i));
         if (p->state() > Proto::S_INIT &&
             p->state() < Proto::S_FAILED &&
-            p->tstamp() + peer_timeout_ < now)
+            p->recv_tstamp() + peer_timeout_ < now)
         {
+            gcomm::SocketStats stats(p->socket()->stats());
             log_info << self_string()
                      << " connection to peer "
                      << p->remote_uuid() << " with addr "
                      << p->remote_addr()
-                     << " timed out, no messages seen in " << peer_timeout_;
+                     << " timed out, no messages seen in " << peer_timeout_
+                     << ", socket stats: "
+                     << stats;
             p->set_state(Proto::S_FAILED);
             handle_failed(p);
         }
         else if (p->state() == Proto::S_OK)
         {
-            if (p->tstamp() + peer_timeout_*2/3 < now)
+            gcomm::SocketStats stats(p->socket()->stats());
+            if (stats.send_queue_length >= 1024)
+            {
+                log_debug << self_string()
+                          << " socket send queue to "
+                          << " peer "
+                          << p->remote_uuid() << " with addr "
+                          << p->remote_addr()
+                          << ", socket stats: "
+                          << stats;
+            }
+            if ((p->recv_tstamp() + peer_timeout_*2/3 < now) ||
+                (p->send_tstamp() + peer_timeout_*1/3 < now))
             {
                 p->send_keepalive();
             }
@@ -1209,15 +1246,15 @@ void gcomm::GMCast::check_liveness()
         if (ae.retry_cnt()             <= ae.max_retries() &&
             live_uuids.find(ae.uuid()) == live_uuids.end())
         {
-            // log_info << self_string()
-            // << " missing live proto entry for " << ae.uuid();
+            log_debug << self_string()
+                      << " missing live proto entry for " << ae.uuid();
             nonlive_uuids.insert(ae.uuid());
             nonlive_peers += AddrList::key(i) + " ";
             should_relay = true;
         }
         else if (ae.last_connect() + peer_timeout_ > now)
         {
-            log_debug << "continuing relaying for "
+            log_debug << "continuing relaying to " << i->first << " for "
                       << (ae.last_connect() + peer_timeout_ - now);
             should_relay = true;
         }
@@ -1227,9 +1264,12 @@ void gcomm::GMCast::check_liveness()
     {
         if (relaying_ == false)
         {
-            log_info << self_string()
-                     << " turning message relay requesting on, nonlive peers: "
-                     << nonlive_peers;
+            if (not nonlive_uuids.empty())
+            {
+                log_info << self_string()
+                         << " turning message relay requesting on, nonlive peers: "
+                         << nonlive_peers;
+            }
             relaying_ = true;
         }
         relay_set_.clear();
@@ -1256,7 +1296,7 @@ void gcomm::GMCast::check_liveness()
             log_debug << "relay set maxel :" << *p << " count: "
                       << CmpUuidCounts(nonlive_uuids, segment_).count(p);
 
-            relay_set_.insert(p->socket().get());
+            relay_set_.insert(RelayEntry(p, p->socket().get()));
             const LinkMap& lm(p->link_map());
             for (LinkMap::const_iterator lm_i(lm.begin()); lm_i != lm.end();
                  ++lm_i)
@@ -1277,7 +1317,7 @@ void gcomm::GMCast::check_liveness()
 
 gu::datetime::Date gcomm::GMCast::handle_timers()
 {
-    const gu::datetime::Date now(gu::datetime::Date::now());
+    const gu::datetime::Date now(gu::datetime::Date::monotonic());
 
     if (now >= next_check_)
     {
@@ -1290,13 +1330,17 @@ gu::datetime::Date gcomm::GMCast::handle_timers()
 }
 
 
-void send(gcomm::Socket* s, gcomm::Datagram& dg)
+void gcomm::GMCast::send(const RelayEntry& re, int segment, gcomm::Datagram& dg)
 {
     int err;
-    if ((err = s->send(dg)) != 0)
+    if ((err = re.socket->send(segment, dg)) != 0)
     {
-        log_debug << "failed to send to " << s->remote_addr()
+        log_debug << "failed to send to " << re.socket->remote_addr()
                   << ": (" << err << ") " << strerror(err);
+    }
+    else if (re.proto)
+    {
+        re.proto->set_send_tstamp(gu::datetime::Date::monotonic());
     }
 }
 
@@ -1317,15 +1361,16 @@ void gcomm::GMCast::relay(const Message& msg,
     if (msg.flags() & Message::F_RELAY)
     {
         gu_trace(push_header(relay_msg, relay_dg));
-        for (SegmentMap::iterator i(segment_map_.begin());
-             i != segment_map_.end(); ++i)
+        for (SegmentMap::iterator segment_i(segment_map_.begin());
+             segment_i != segment_map_.end(); ++segment_i)
         {
-            Segment& segment(i->second);
-            for (Segment::iterator j(segment.begin()); j != segment.end(); ++j)
+            Segment& segment(segment_i->second);
+            for (Segment::iterator target_i(segment.begin());
+                 target_i != segment.end(); ++target_i)
             {
-                if ((*j)->id() != exclude_id)
+                if ((*target_i).socket->id() != exclude_id)
                 {
-                    send(*j, relay_dg);
+                    send(*target_i, msg.segment_id(), relay_dg);
                 }
             }
         }
@@ -1338,10 +1383,13 @@ void gcomm::GMCast::relay(const Message& msg,
             // nodes in local segment that are not directly reachable
             relay_msg.set_flags(relay_msg.flags() | Message::F_RELAY);
             gu_trace(push_header(relay_msg, relay_dg));
-            for (std::set<Socket*>::iterator ri(relay_set_.begin());
-                 ri != relay_set_.end(); ++ri)
+            for (RelaySet::iterator relay_i(relay_set_.begin());
+                 relay_i != relay_set_.end(); ++relay_i)
             {
-                send(*ri, relay_dg);
+                if ((*relay_i).socket->id() != exclude_id)
+                {
+                    send(*relay_i, msg.segment_id(), relay_dg);
+                }
             }
             gu_trace(pop_header(relay_msg, relay_dg));
             relay_msg.set_flags(relay_msg.flags() & ~Message::F_RELAY);
@@ -1358,7 +1406,7 @@ void gcomm::GMCast::relay(const Message& msg,
         Segment& segment(segment_map_[segment_]);
         for (Segment::iterator i(segment.begin()); i != segment.end(); ++i)
         {
-            send(*i, relay_dg);
+            send(*i, msg.segment_id(), relay_dg);
         }
     }
     else
@@ -1393,7 +1441,7 @@ void gcomm::GMCast::handle_up(const void*        id,
             }
             else
             {
-                gu_trace(msg.unserialize(&dg.payload()[0],
+                gu_trace(msg.unserialize(dg.payload().data(),
                                          dg.len(),
                                          dg.offset()));
             }
@@ -1435,7 +1483,7 @@ void gcomm::GMCast::handle_up(const void*        id,
 
             try
             {
-                msg.unserialize(&dg.payload()[0], dg.len(),
+                msg.unserialize(dg.payload().data(), dg.len(),
                                 dg.offset());
             }
             catch (gu::Exception& e)
@@ -1461,7 +1509,7 @@ void gcomm::GMCast::handle_up(const void*        id,
                           Datagram(dg, dg.offset() + msg.serial_size()),
                           id);
                 }
-                p->set_tstamp(gu::datetime::Date::now());
+                p->set_recv_tstamp(gu::datetime::Date::monotonic());
                 send_up(Datagram(dg, dg.offset() + msg.serial_size()),
                         ProtoUpMeta(msg.source_uuid()));
                 return;
@@ -1470,7 +1518,7 @@ void gcomm::GMCast::handle_up(const void*        id,
             {
                 try
                 {
-                    p->set_tstamp(gu::datetime::Date::now());
+                    p->set_recv_tstamp(gu::datetime::Date::monotonic());
                     gu_trace(p->handle_message(msg));
                 }
                 catch (const gu::Exception& e)
@@ -1530,26 +1578,71 @@ void gcomm::GMCast::handle_up(const void*        id,
     }
 }
 
+static gcomm::gmcast::Proto* find_by_remote_uuid(
+    const gcomm::gmcast::ProtoMap& proto_map,
+    const gcomm::UUID& uuid)
+{
+    for (gcomm::gmcast::ProtoMap::const_iterator i(proto_map.begin());
+         i != proto_map.end(); ++i)
+    {
+        if (i->second->remote_uuid() == uuid)
+        {
+            return i->second;
+        }
+    }
+    return 0;
+}
 
 int gcomm::GMCast::handle_down(Datagram& dg, const ProtoDownMeta& dm)
 {
     Message msg(version_, Message::GMCAST_T_USER_BASE, uuid(), 1, segment_);
+
+    // If target is set and proto entry for target is found,
+    // send a direct message. Otherwise fall back for broadcast
+    // to ensure message delivery via relay
+    if (dm.target() != UUID::nil())
+    {
+        Proto* target_proto(find_by_remote_uuid(*proto_map_, dm.target()));
+        if (target_proto && target_proto->state() == Proto::S_OK)
+        {
+            gu_trace(push_header(msg, dg));
+            int err;
+            if ((err = target_proto->socket()->send(msg.segment_id(), dg)) != 0)
+            {
+                log_debug << "failed to send to "
+                          << target_proto->socket()->remote_addr()
+                          << ": (" << err << ") " << strerror(err);
+            }
+            else
+            {
+                target_proto->set_send_tstamp(gu::datetime::Date::monotonic());
+            }
+            gu_trace(pop_header(msg, dg));
+            if (err == 0)
+            {
+                return 0;
+            }
+            // In case of error fall back to broadcast
+        }
+        else
+        {
+            log_debug << "Target " << dm.target() << " proto not found";
+        }
+    }
 
     // handle relay set first, skip these peers below
     if (relay_set_.empty() == false)
     {
         msg.set_flags(msg.flags() | Message::F_RELAY);
         gu_trace(push_header(msg, dg));
-        for (std::set<Socket*>::iterator ri(relay_set_.begin());
+        for (RelaySet::iterator ri(relay_set_.begin());
              ri != relay_set_.end(); ++ri)
         {
-            send(*ri, dg);
+            send(*ri, msg.segment_id(), dg);
         }
         gu_trace(pop_header(msg, dg));
         msg.set_flags(msg.flags() & ~Message::F_RELAY);
     }
-
-
 
     for (SegmentMap::iterator si(segment_map_.begin());
          si != segment_map_.end(); ++si)
@@ -1566,7 +1659,7 @@ int gcomm::GMCast::handle_down(Datagram& dg, const ProtoDownMeta& dm)
                 relay_set_.find(segment[target_idx]) == relay_set_.end())
             {
                 gu_trace(push_header(msg, dg));
-                send(segment[target_idx], dg);
+                send(segment[target_idx], msg.segment_id(), dg);
                 gu_trace(pop_header(msg, dg));
             }
         }
@@ -1581,7 +1674,7 @@ int gcomm::GMCast::handle_down(Datagram& dg, const ProtoDownMeta& dm)
                 if (relay_set_.empty() == true ||
                     relay_set_.find(*i) == relay_set_.end())
                 {
-                    send(*i, dg);
+                    send(*i, msg.segment_id(), dg);
                 }
             }
             gu_trace(pop_header(msg, dg));
@@ -1703,6 +1796,15 @@ void gcomm::GMCast::handle_stable_view(const View& view)
     }
 }
 
+void gcomm::GMCast::handle_allow_connect(const UUID& uuid)
+{
+    auto it = std::find_if(remote_addrs_.begin(), remote_addrs_.end(),
+                            AddrListUUIDCmp(uuid));
+    if (it != remote_addrs_.end())
+    {
+        enable_reconnect(*it);
+    }
+}
 
 void gcomm::GMCast::handle_evict(const UUID& uuid)
 {
@@ -1728,15 +1830,13 @@ void gcomm::GMCast::add_or_del_addr(const std::string& val)
     if (val.compare(0, 4, "add:") == 0)
     {
         gu::URI uri(val.substr(4));
-        std::string addr(gu::net::resolve(uri_string(get_scheme(use_ssl_),
+        std::string addr(gu::net::resolve(uri_string(get_scheme(use_ssl_, dynamic_socket_),
                                                      uri.get_host(),
                                                      uri.get_port())).to_string());
         log_info << "inserting address '" << addr << "'";
         insert_address(addr, UUID(), remote_addrs_);
         AddrList::iterator ai(remote_addrs_.find(addr));
-        AddrList::value(ai).set_max_retries(
-            max_initial_reconnect_attempts_);
-        AddrList::value(ai).set_retry_cnt(-1);
+        enable_reconnect(*ai);
     }
     else if (val.compare(0, 4, "del:") == 0)
     {
@@ -1756,9 +1856,8 @@ void gcomm::GMCast::add_or_del_addr(const std::string& val)
                 }
             }
             AddrEntry& ae(AddrList::value(ai));
-            ae.set_max_retries(0);
-            ae.set_retry_cnt(1);
-            ae.set_next_reconnect(gu::datetime::Date::now() + time_wait_);
+            disable_reconnect(*ai);
+            ae.set_next_reconnect(gu::datetime::Date::monotonic() + time_wait_);
             update_addresses();
         }
         else

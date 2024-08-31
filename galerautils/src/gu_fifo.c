@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2017 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2020 Codership Oy <info@codership.com>
  *
  * Queue (FIFO) class implementation
  *
@@ -111,7 +111,7 @@ gu_fifo_t *gu_fifo_create (size_t length, size_t item_size)
 
         if (max_size > gu_avphys_bytes()) {
             gu_error ("Maximum FIFO size %llu exceeds available memory "
-                      "limit %llu", max_size, gu_avphys_bytes());
+                      "limit %zu", max_size, gu_avphys_bytes());
             return NULL;
         }
 
@@ -122,8 +122,8 @@ gu_fifo_t *gu_fifo_create (size_t length, size_t item_size)
         }
 
 
-        gu_debug ("Creating FIFO buffer of %llu elements of size %llu, "
-                  "memory min used: %zu, max used: %zu",
+        gu_debug ("Creating FIFO buffer of %llu elements of size %zu, "
+                  "memory min used: %llu, max used: %llu",
                   array_len * row_len, item_size, alloc_size,
                   alloc_size + array_len*row_size);
 
@@ -143,7 +143,7 @@ gu_fifo_t *gu_fifo_create (size_t length, size_t item_size)
             gu_cond_init  (&ret->put_cond, NULL);
         }
         else {
-            gu_error ("Failed to allocate %zu bytes for FIFO", alloc_size);
+            gu_error ("Failed to allocate %llu bytes for FIFO", alloc_size);
         }
     }
 
@@ -204,7 +204,7 @@ static int fifo_flush (gu_fifo_t* q)
     /* if there are items in the queue, wait until they are all fetched */
     while (q->used > 0 && 0 == ret) {
         /* will make getters to signal every time item is removed */
-        gu_warn ("Waiting for %lu items to be fetched.", q->used);
+        gu_warn ("Waiting for %u items to be fetched.", q->used);
         q->put_wait++;
         ret = gu_cond_wait (&q->put_cond, &q->lock);
     }
@@ -339,8 +339,9 @@ void* gu_fifo_get_head (gu_fifo_t* q, int* err)
     }
 }
 
-/*! Advances FIFO head and unlocks FIFO. */
-void gu_fifo_pop_head (gu_fifo_t* q)
+/*! Unprotected helper for gu_fifo_pop_head() and gu_fifo_clear() */
+static inline
+void fifo_advance_head (gu_fifo_t* q)
 {
     if (FIFO_COL(q, q->head) == q->col_mask) {
         /* removing last unit from the row */
@@ -356,6 +357,12 @@ void gu_fifo_pop_head (gu_fifo_t* q)
     if (gu_unlikely(q->used < q->used_min)) {
         q->used_min = q->used;
     }
+}
+
+/*! Advances FIFO head and unlocks FIFO. */
+void gu_fifo_pop_head (gu_fifo_t* q)
+{
+    fifo_advance_head(q);
 
     if (fifo_unlock_get(q)) {
         gu_fatal ("Faled to unlock queue to get item.");
@@ -469,6 +476,15 @@ void gu_fifo_stats_flush(gu_fifo_t* q)
     fifo_unlock (q);
 }
 
+void gu_fifo_clear(gu_fifo_t* q)
+{
+    fifo_lock (q);
+
+    while (q->used > 0) fifo_advance_head(q);
+
+    fifo_unlock (q);
+}
+
 /* destructor - would block until all members are dequeued */
 void gu_fifo_destroy   (gu_fifo_t *queue)
 {
@@ -498,7 +514,7 @@ void gu_fifo_destroy   (gu_fifo_t *queue)
 
     while (gu_mutex_destroy (&queue->lock)) continue;
 
-    /* only one row migth be left */
+    /* only one row might be left */
     {
         ulong row = FIFO_ROW(queue, queue->tail);
         if (queue->rows[row]) {

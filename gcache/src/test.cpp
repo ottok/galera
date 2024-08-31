@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2014 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2021 Codership Oy <info@codership.com>
  *
  */
 
@@ -9,6 +9,8 @@
 #include <gu_exception.hpp>
 
 using namespace gcache;
+
+#define TEST_CACHE "test.cache"
 
 int
 main (int argc, char* argv[])
@@ -25,14 +27,15 @@ main (int argc, char* argv[])
     if (argc > 1) fname.assign(argv[1]); // take supplied file name if any
     gu::Config conf;
     GCache::register_params(conf);
-    conf.parse("gcache.name = test.cache; gcache.size = 16K");
-    GCache* cache = new GCache (conf, "");
+    conf.parse("gcache.name = " TEST_CACHE "; gcache.size = 16K");
+    GCache* cache = new GCache (NULL, conf, "");
 
     log_info  << "";
     log_info  << "...do something...";
     log_info  << "";
 
     delete cache;
+    ::unlink(TEST_CACHE);
 
     log_info  << "Exit: " << ret;
 

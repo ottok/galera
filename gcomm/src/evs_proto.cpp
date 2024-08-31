@@ -1,12 +1,6 @@
 /*
- * Copyright (C) 2009-2014 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2023 Codership Oy <info@codership.com>
  */
-
-#ifdef PROFILE_EVS_PROTO
-#define GCOMM_PROFILE 1
-#else
-#undef GCOMM_PROFILE
-#endif // PROFILE_EVS_PROTO
 
 #include "evs_proto.hpp"
 #include "evs_message2.hpp"
@@ -25,6 +19,7 @@
 #include <numeric>
 #include <iterator>
 #include <set>
+#include <iostream> // std::cerr
 
 using namespace std::rel_ops;
 
@@ -52,7 +47,7 @@ gcomm::evs::Proto::Proto(gu::Config&    conf,
                          0, GCOMM_PROTOCOL_MAX_VERSION + 1)),
     debug_mask_(param<int>(conf, uri, Conf::EvsDebugLogMask, "0x1", std::hex)),
     info_mask_(param<int>(conf, uri, Conf::EvsInfoLogMask, "0x0", std::hex)),
-    last_stats_report_(gu::datetime::Date::now()),
+    last_stats_report_(gu::datetime::Date::monotonic()),
     collect_stats_(true),
     hs_agreed_("0.0,0.0001,0.00031623,0.001,0.0031623,0.01,0.031623,0.1,0.31623,1.,3.1623,10.,31.623"),
     hs_safe_("0.0,0.0001,0.00031623,0.001,0.0031623,0.01,0.031623,0.1,0.31623,1.,3.1623,10.,31.623"),
@@ -60,21 +55,11 @@ gcomm::evs::Proto::Proto(gu::Config&    conf,
     safe_deliv_latency_(),
     send_queue_s_(0),
     n_send_queue_s_(0),
-    sent_msgs_(7, 0),
+    sent_msgs_(Message::num_message_types, 0),
     retrans_msgs_(0),
     recovered_msgs_(0),
-    recvd_msgs_(7, 0),
+    recvd_msgs_(Message::num_message_types, 0),
     delivered_msgs_(O_LOCAL_CAUSAL + 1),
-    send_user_prof_    ("send_user"),
-    send_gap_prof_     ("send_gap"),
-    send_join_prof_    ("send_join"),
-    send_install_prof_ ("send_install"),
-    send_leave_prof_   ("send_leave"),
-    consistent_prof_   ("consistent"),
-    consensus_prof_    ("consensus"),
-    shift_to_prof_     ("shift_to"),
-    input_map_prof_    ("input_map"),
-    delivery_prof_     ("delivery"),
     delivering_(false),
     my_uuid_(my_uuid),
     segment_(segment),
@@ -148,8 +133,8 @@ gcomm::evs::Proto::Proto(gu::Config&    conf,
     delayed_keep_period_(param<gu::datetime::Period>(
                              conf, uri, Conf::EvsDelayedKeepPeriod,
                              Defaults::EvsDelayedKeepPeriod)),
-    last_inactive_check_   (gu::datetime::Date::now()),
-    last_causal_keepalive_ (gu::datetime::Date::now()),
+    last_inactive_check_   (gu::datetime::Date::monotonic()),
+    last_causal_keepalive_ (gu::datetime::Date::monotonic()),
     current_view_(0, ViewId(V_TRANS, my_uuid,
                          rst_view ? rst_view -> id().seq() + 1 : 0)),
     previous_view_(),
@@ -158,6 +143,7 @@ gcomm::evs::Proto::Proto(gu::Config&    conf,
     input_map_(new InputMap()),
     causal_queue_(),
     consensus_(*this, known_, *input_map_, current_view_),
+    last_sent_join_tstamp_(),
     install_message_(0),
     max_view_id_seq_(0),
     attempt_seq_(1),
@@ -182,6 +168,7 @@ gcomm::evs::Proto::Proto(gu::Config&    conf,
                                    Defaults::EvsUserSendWindow),
                     gu::from_string<seqno_t>(Defaults::EvsUserSendWindowMin),
                     send_window_ + 1)),
+    bytes_since_request_user_msg_feedback_(),
     output_(),
     send_buf_(),
     max_output_size_(128),
@@ -233,7 +220,7 @@ gcomm::evs::Proto::Proto(gu::Config&    conf,
     if (rst_view) {
         previous_view_ = *rst_view;
         previous_views_.insert(
-            std::make_pair(rst_view -> id(), gu::datetime::Date::now()));
+            std::make_pair(rst_view -> id(), gu::datetime::Date::monotonic()));
     }
     if (mtu_ != std::numeric_limits<size_t>::max())
     {
@@ -538,7 +525,7 @@ std::string gcomm::evs::Proto::stats() const
     std::copy(sent_msgs_.begin(), sent_msgs_.end(),
          std::ostream_iterator<long long int>(os, ","));
     os << "}\n\tsent per sec {";
-    const double norm(double(gu::datetime::Date::now().get_utc()
+    const double norm(double(gu::datetime::Date::monotonic().get_utc()
                              - last_stats_report_.get_utc())/gu::datetime::Sec);
     std::vector<double> result(7, norm);
     std::transform(sent_msgs_.begin(), sent_msgs_.end(),
@@ -574,7 +561,7 @@ void gcomm::evs::Proto::reset_stats()
     safe_deliv_latency_.clear();
     send_queue_s_ = 0;
     n_send_queue_s_ = 0;
-    last_stats_report_ = gu::datetime::Date::now();
+    last_stats_report_ = gu::datetime::Date::monotonic();
 }
 
 
@@ -618,7 +605,7 @@ void gcomm::evs::Proto::handle_inactivity_timer()
 void gcomm::evs::Proto::handle_retrans_timer()
 {
     evs_log_debug(D_TIMERS) << "retrans timer";
-    if (state() == S_GATHER)
+    if (state() == S_GATHER || state() == S_JOINING)
     {
         if (install_message_ != 0)
         {
@@ -662,7 +649,7 @@ void gcomm::evs::Proto::handle_retrans_timer()
     else if (state() == S_OPERATIONAL)
     {
         const seqno_t prev_last_sent(last_sent_);
-        evs_log_debug(D_TIMERS) << "send user timer, last_sent=" << last_sent_;
+        evs_log_debug(D_TIMERS) << "sending keepalive, last_sent=" << last_sent_;
         Datagram dg;
         gu_trace((void)send_user(dg, 0xff, O_DROP, -1, -1));
         if (prev_last_sent == last_sent_)
@@ -673,22 +660,21 @@ void gcomm::evs::Proto::handle_retrans_timer()
     else if (state() == S_LEAVING)
     {
         evs_log_debug(D_TIMERS) << "send leave timer";
-        profile_enter(send_leave_prof_);
         send_leave(false);
-        profile_leave(send_leave_prof_);
+        retrans_missing();
     }
 }
 
 void gcomm::evs::Proto::isolate(gu::datetime::Period period)
 {
-    isolation_end_ = gu::datetime::Date::now() + period;
+    isolation_end_ = gu::datetime::Date::monotonic() + period;
 }
 
 
 void gcomm::evs::Proto::handle_install_timer()
 {
     gcomm_assert(state() == S_GATHER || state() == S_INSTALL);
-    log_warn << self_string() << " install timer expired";
+    log_info << self_string() << " install timer expired";
 
     bool is_cons(consensus_.is_consensus());
     bool is_repr(is_representative(uuid()));
@@ -783,19 +769,6 @@ void gcomm::evs::Proto::handle_install_timer()
 void gcomm::evs::Proto::handle_stats_timer()
 {
     reset_stats();
-#ifdef GCOMM_PROFILE
-    evs_log_info(I_PROFILING) << "\nprofiles:\n";
-    evs_log_info(I_PROFILING) << send_user_prof_    << "\n";
-    evs_log_info(I_PROFILING) << send_gap_prof_     << "\n";
-    evs_log_info(I_PROFILING) << send_join_prof_    << "\n";
-    evs_log_info(I_PROFILING) << send_install_prof_ << "\n";
-    evs_log_info(I_PROFILING) << send_leave_prof_   << "\n";
-    evs_log_info(I_PROFILING) << consistent_prof_   << "\n";
-    evs_log_info(I_PROFILING) << consensus_prof_    << "\n";
-    evs_log_info(I_PROFILING) << shift_to_prof_     << "\n";
-    evs_log_info(I_PROFILING) << input_map_prof_    << "\n";
-    evs_log_info(I_PROFILING) << delivery_prof_     << "\n";
-#endif // GCOMM_PROFILE
 }
 
 
@@ -816,7 +789,7 @@ private:
 gu::datetime::Date gcomm::evs::Proto::next_expiration(const Timer t) const
 {
     gcomm_assert(state() != S_CLOSED);
-    gu::datetime::Date now(gu::datetime::Date::now());
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
     switch (t)
     {
     case T_INACTIVITY:
@@ -827,6 +800,7 @@ gu::datetime::Date gcomm::evs::Proto::next_expiration(const Timer t) const
         case S_OPERATIONAL:
         case S_LEAVING:
             return (now + retrans_period_);
+        case S_JOINING:
         case S_GATHER:
         case S_INSTALL:
             return (now + join_retrans_period_);
@@ -877,7 +851,7 @@ void gcomm::evs::Proto::cancel_timer(Timer t)
 
 gu::datetime::Date gcomm::evs::Proto::handle_timers()
 {
-    gu::datetime::Date now(gu::datetime::Date::now());
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
 
     while (timers_.empty() == false &&
            TimerList::key(timers_.begin()) <= now)
@@ -917,7 +891,7 @@ gu::datetime::Date gcomm::evs::Proto::handle_timers()
 
 void gcomm::evs::Proto::check_inactive()
 {
-    const gu::datetime::Date now(gu::datetime::Date::now());
+    const gu::datetime::Date now(gu::datetime::Date::monotonic());
     if (last_inactive_check_ + inactive_check_period_*3 < now)
     {
         log_warn << "last inactive check more than " << inactive_check_period_*3
@@ -927,7 +901,7 @@ void gcomm::evs::Proto::check_inactive()
         return;
     }
 
-    NodeMap::value(self_i_).set_tstamp(gu::datetime::Date::now());
+    NodeMap::value(self_i_).set_tstamp(gu::datetime::Date::monotonic());
     std::for_each(known_.begin(), known_.end(), InspectNode());
 
     bool has_inactive(false);
@@ -971,24 +945,22 @@ void gcomm::evs::Proto::check_inactive()
         }
 
         DelayedList::iterator dli(delayed_list_.find(node_uuid));
-        if (node.seen_tstamp() + retrans_period_ + delay_margin_ <= now)
+        if (auto_evict_ &&
+            node.seen_tstamp() + retrans_period_ + delay_margin_ <= now)
         {
-            if (node.index() != std::numeric_limits<size_t>::max())
+            if (node.index() != Node::invalid_index)
             {
                 // Delayed node in group, check input map state and request
                 // message recovery if necessary
                 Range range(input_map_->range(node.index()));
-                evs_log_info(I_STATE) << "delayed "
-                                      << node_uuid << " requesting range "
-                                      << Range(range.lu(), last_sent_);
+                log_info << "delayed node: "
+                         << node_uuid << ", requesting range "
+                         << Range(range.lu(), last_sent_);
                 if (last_sent_ >= range.lu())
                 {
-                    // Request recovering message from all nodes (indicated
-                    // by last arg) to increase probablity of receiving the
-                    // message.
-                    gu_trace(send_gap(EVS_CALLER, node_uuid, current_view_.id(),
-                                      Range(range.lu(), last_sent_),
-                                      false, true));
+                    // Request missing message range from delayed node.
+                    request_retrans(node_uuid, node_uuid,
+                                    Range(range.lu(), last_sent_));
                 }
             }
 
@@ -1088,17 +1060,13 @@ void gcomm::evs::Proto::check_inactive()
 
     if (has_inactive == true && state() == S_OPERATIONAL)
     {
-        profile_enter(shift_to_prof_);
         gu_trace(shift_to(S_GATHER, true));
-        profile_leave(shift_to_prof_);
     }
     else if (has_inactive    == true &&
              state()     == S_LEAVING &&
              n_operational() == 1)
     {
-        profile_enter(shift_to_prof_);
         gu_trace(shift_to(S_CLOSED));
-        profile_leave(shift_to_prof_);
     }
 
     last_inactive_check_ = now;
@@ -1154,7 +1122,7 @@ void gcomm::evs::Proto::cleanup_foreign(const InstallMessage& im)
 
 void gcomm::evs::Proto::cleanup_views()
 {
-    gu::datetime::Date now(gu::datetime::Date::now());
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
 
     ViewList::iterator i, i_next;
     for (i = previous_views_.begin(); i != previous_views_.end(); i = i_next)
@@ -1170,7 +1138,7 @@ void gcomm::evs::Proto::cleanup_views()
 
 void gcomm::evs::Proto::cleanup_evicted()
 {
-    gu::datetime::Date now(gu::datetime::Date::now());
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
     Protolay::EvictList::const_iterator i, i_next;
     for (i = evict_list().begin(); i != evict_list().end(); i = i_next)
     {
@@ -1466,6 +1434,21 @@ bool gcomm::evs::Proto::is_flow_control(const seqno_t seq, const seqno_t win) co
     return false;
 }
 
+bool gcomm::evs::Proto::request_user_msg_feedback(const gcomm::Datagram& dg)
+    const
+{
+    // Request feedback from peers at least once per 128kB chunk. This will
+    // force the nodes to complete their seqnos.
+    if (bytes_since_request_user_msg_feedback_ + dg.len() >= (size_t(1) << 17))
+    {
+        evs_log_debug(D_USER_MSGS) << "bytes since request user msg feedback: "
+                                   << bytes_since_request_user_msg_feedback_
+                                   << " dg len: " << dg.len();
+        return true;
+    }
+    return false;
+}
+
 int gcomm::evs::Proto::send_user(Datagram& dg,
                                  uint8_t const user_type,
                                  Order  const order,
@@ -1500,16 +1483,21 @@ int gcomm::evs::Proto::send_user(Datagram& dg,
 
     // If output queue wont contain messages after this patch,
     // up_to_seqno is given (msg completion) or flow contol would kick in
-    // at next batch, don't set F_MSG_MORE.
+    // at next batch, don't set F_MSG_MORE. Also if the number of bytes
+    // in send pipeline exceeds predefined value as reported by
+    // request_user_msg_feedback(), the F_MSG_MORE will not get set.
     if (output_.size() <= n_aggregated ||
         up_to_seqno != -1 ||
-        (win != -1 && is_flow_control(last_msg_seq + 1, win) == true))
+        (win != -1 && (is_flow_control(last_msg_seq + 1, win) ||
+                       request_user_msg_feedback(dg))))
     {
         flags = 0;
+        bytes_since_request_user_msg_feedback_ = 0;
     }
     else
     {
         flags = Message::F_MSG_MORE;
+        bytes_since_request_user_msg_feedback_ += dg.len();
     }
     if (n_aggregated > 1)
     {
@@ -1582,8 +1570,7 @@ size_t gcomm::evs::Proto::aggregate_len() const
     bool is_aggregate(false);
     size_t ret(0);
     AggregateMessage am;
-    std::deque<std::pair<Datagram, ProtoDownMeta> >::const_iterator
-        i(output_.begin());
+    out_queue::const_iterator i(output_.begin());
     const Order ord(i->second.order());
     ret += i->first.len() + am.serial_size();
     for (++i; i != output_.end() && i->second.order() == ord; ++i)
@@ -1616,8 +1603,7 @@ int gcomm::evs::Proto::send_user(const seqno_t win)
         size_t offset(0);
         size_t n(0);
 
-        std::deque<std::pair<Datagram, ProtoDownMeta> >::iterator
-            i(output_.begin());
+        out_queue::const_iterator i(output_.begin());
         Order ord(i->second.order());
         while ((alen > 0 && i != output_.end()))
         {
@@ -1673,9 +1659,7 @@ void gcomm::evs::Proto::complete_user(const seqno_t high_seq)
 
     Datagram wb;
     int err;
-    profile_enter(send_user_prof_);
     err = send_user(wb, 0xff, O_DROP, -1, high_seq);
-    profile_leave(send_user_prof_);
     if (err != 0)
     {
         log_debug << "failed to send completing msg " << strerror(err)
@@ -1685,36 +1669,57 @@ void gcomm::evs::Proto::complete_user(const seqno_t high_seq)
 
 }
 
-
-int gcomm::evs::Proto::send_delegate(Datagram& wb)
+int gcomm::evs::Proto::send_delegate(Datagram& wb, const UUID& target)
 {
     DelegateMessage dm(version_, uuid(), current_view_.id(),
                        ++fifo_seq_);
     push_header(dm, wb);
-    int ret = send_down(wb, ProtoDownMeta());
+    int ret = send_down(wb, ProtoDownMeta(target));
     pop_header(dm, wb);
     sent_msgs_[Message::EVS_T_DELEGATE]++;
     return ret;
 }
 
+bool gcomm::evs::Proto::gap_rate_limit(const UUID& target, const Range& range)
+    const
+{
+    NodeMap::const_iterator target_i(known_.find(target));
+    // Sanity check: The target should always be in the set
+    // of known nodes. If it is not, skip sending the gap message
+    // in production.
+    assert(target_i != known_.end());
+    if (target_i == known_.end())
+    {
+        return true;
+    }
+    const Node& target_node(target_i->second);
+    // Limit requesting ranges with the same highest seen within
+    // 50msec period.
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
+    if (now < target_node.last_requested_range_tstamp() + gu::datetime::MSec*100)
+    {
+        evs_log_debug(D_GAP_MSGS) << "Rate limiting gap: now " << now
+                                  << " requested range tstamp: "
+                                  << target_node.last_requested_range_tstamp()
+                                  << " requested range: "
+                                  << target_node.last_requested_range();
+        return true;
+    }
+    return false;
+}
 
 void gcomm::evs::Proto::send_gap(EVS_CALLER_ARG,
                                  const UUID&   range_uuid,
                                  const ViewId& source_view_id,
                                  const Range   range,
-                                 const bool    commit,
-                                 const bool    req_all)
+                                 const bool    commit)
 {
+    assert(range_uuid == UUID::nil());
+    assert(range.is_empty());
     gcomm_assert((commit == false && source_view_id == current_view_.id())
                  || install_message_ != 0);
-    // TODO: Investigate if gap sending can be somehow limited,
-    // message loss happen most probably during congestion and
-    // flooding network with gap messages won't probably make
-    // conditions better
-
     uint8_t flags(0);
     if (commit == true) flags |= Message::F_COMMIT;
-    if (req_all) flags |= Message::F_RETRANS;
 
     GapMessage gm(version_,
                   uuid(),
@@ -1732,7 +1737,7 @@ void gcomm::evs::Proto::send_gap(EVS_CALLER_ARG,
     gu::Buffer buf;
     serialize(gm, buf);
     Datagram dg(buf);
-    int err = send_down(dg, ProtoDownMeta());
+    int err = send_down(dg, ProtoDownMeta(range_uuid));
     if (err != 0)
     {
         log_debug << "send failed: " << strerror(err);
@@ -1885,6 +1890,17 @@ void gcomm::evs::Proto::send_join(bool handle)
 
     JoinMessage jm(create_join());
 
+    // Allow connections for all members that may be accepted
+    // in the next view.
+    for (const auto& node : jm.node_list())
+    {
+        if (node.second.operational() && not node.second.suspected()
+            && not node.second.evicted())
+        {
+            allow_connect(node.first);
+        }
+    }
+
     gu::Buffer buf;
     serialize(jm, buf);
     Datagram dg(buf);
@@ -1893,6 +1909,10 @@ void gcomm::evs::Proto::send_join(bool handle)
     if (err != 0)
     {
         log_debug << "send failed: " << strerror(err);
+    }
+    else
+    {
+        last_sent_join_tstamp_ = gu::datetime::Date::monotonic();
     }
     sent_msgs_[Message::EVS_T_JOIN]++;
     if (handle == true)
@@ -2074,7 +2094,10 @@ void gcomm::evs::Proto::resend(const UUID& gap_source, const Range range)
                              << range.lu() << " -> "
                              << range.hs();
 
-    seqno_t seq(range.lu());
+    // All of the nodes have received all messages up to input_map_->safe_seq(),
+    // therefore it does not make sense to retransmit anything below that.
+    seqno_t seq(std::max(range.lu(), input_map_->safe_seq() + 1));
+    evs_log_debug(D_RETRANS) << "retransmitting from " << seq;
     while (seq <= range.hs())
     {
         InputMap::iterator msg_i = input_map_->find(
@@ -2115,7 +2138,7 @@ void gcomm::evs::Proto::resend(const UUID& gap_source, const Range range)
 
         push_header(um, rb);
 
-        int err = send_down(rb, ProtoDownMeta());
+        int err = send_down(rb, ProtoDownMeta(gap_source));
         if (err != 0)
         {
             log_debug << "send failed: " << strerror(err);
@@ -2159,8 +2182,11 @@ void gcomm::evs::Proto::recover(const UUID& gap_source,
                              << " requested range " << range
                              << " available " << im_range;
 
-
-    seqno_t seq(range.lu());
+    // All of the nodes have received all messages up to input_map_->safe_seq(),
+    // therefore it does not make sense to retransmit anything below that.
+    seqno_t seq(std::max(range.lu(), input_map_->safe_seq() + 1));
+    evs_log_debug(D_RETRANS) << "recovering from " << seq;
+    size_t n_recovered(0);
     while (seq <= range.hs() && seq <= im_range.hs())
     {
         InputMap::iterator msg_i = input_map_->find(range_node.index(), seq);
@@ -2198,7 +2224,8 @@ void gcomm::evs::Proto::recover(const UUID& gap_source,
 
         push_header(um, rb);
 
-        int err = send_delegate(rb);
+        ++n_recovered;
+        int err = send_delegate(rb, gap_source);
         if (err != 0)
         {
             log_debug << "send failed: " << strerror(err);
@@ -2211,8 +2238,21 @@ void gcomm::evs::Proto::recover(const UUID& gap_source,
         seq = seq + msg.seq_range() + 1;
         recovered_msgs_++;
     }
+    evs_log_debug(D_RETRANS) << "recovered: " << n_recovered;
 }
 
+
+class UUIDFixedPartCmp
+{
+public:
+    UUIDFixedPartCmp(const gcomm::UUID& uuid) : uuid_(uuid) { }
+    bool operator()(const gcomm::evs::NodeMap::value_type& vt) const
+    {
+        return uuid_.fixed_part_matches(vt.first);
+    }
+private:
+    const gcomm::UUID& uuid_;
+};
 
 void gcomm::evs::Proto::handle_foreign(const Message& msg)
 {
@@ -2222,7 +2262,7 @@ void gcomm::evs::Proto::handle_foreign(const Message& msg)
         return;
     }
 
-    // Don't handle foreing messages in install phase.
+    // Don't handle foreign messages in install phase.
     // This includes not only INSTALL state, but also
     // GATHER state after receiving install message.
     if (install_message_ != 0)
@@ -2240,20 +2280,49 @@ void gcomm::evs::Proto::handle_foreign(const Message& msg)
 
     const UUID& source(msg.source());
 
+    if (source == UUID::nil())
+    {
+        log_warn << "Received message with nil source UUID, dropping";
+        return;
+    }
+
+    NodeMap::iterator i;
+    if ((i = std::find_if(known_.begin(), known_.end(), UUIDFixedPartCmp(source)))
+        != known_.end())
+    {
+        // Keep the new incarnation out of the group until a new view has been
+        // established.
+        evs_log_debug(D_FOREIGN_MSGS)
+            << "Dropping message from new incarnation of already known "
+            "node in current view, old: " << i->first << " new: " << source;
+        return;
+    }
+
+    // When joining, wait until at least one of the existing node sees
+    // a join message from joining node. This is to reduce the probability
+    // of install timeouts because of already ongoing cluster configuration
+    // changes.
+    const bool is_join_message_with_self
+        = msg.type() == Message::EVS_T_JOIN
+          && msg.node_list().find(my_uuid_) != msg.node_list().end();
+    if (state() == S_JOINING && not is_join_message_with_self)
+    {
+        evs_log_debug(D_FOREIGN_MSGS)
+            << "Join message without self in S_JOINING state, dropping message";
+        return;
+    }
+
     evs_log_info(I_STATE) << " detected new message source "
                           << source;
 
-    NodeMap::iterator i;
     gu_trace(i = known_.insert_unique(
                  std::make_pair(source, Node(*this))));
     assert(NodeMap::value(i).operational() == true);
 
-    if (state() == S_JOINING || state() == S_GATHER ||
-        state() == S_OPERATIONAL)
+    if (state() == S_JOINING || state() == S_GATHER || state() == S_OPERATIONAL)
     {
         evs_log_info(I_STATE)
-            << " shift to GATHER due to foreign message from "
-            << msg.source();
+            << " shift to GATHER due to foreign message from " << msg.source();
         gu_trace(shift_to(S_GATHER, false));
         // Reset install timer each time foreign message is seen to
         // synchronize install timers.
@@ -2318,12 +2387,20 @@ void gcomm::evs::Proto::handle_msg(const Message& msg,
     Node& node(NodeMap::value(ii));
     if (direct == true)
     {
-        node.set_seen_tstamp(gu::datetime::Date::now());
+        node.set_seen_tstamp(gu::datetime::Date::monotonic());
     }
 
-    if (node.operational()                 == false &&
-        node.leave_message()               == 0     &&
-        (msg.flags() & Message::F_RETRANS) == 0)
+    if (state() == S_LEAVING && msg.source_view_id() == current_view_.id())
+    {
+        // Allow messages in leaving state. This is needed for both
+        // updating the join messages for retransmission and for handling
+        // retransmitted messages.
+        evs_log_debug(D_FOREIGN_MSGS) << "Allow message from current view "
+                                      << "in leaving state" << msg;
+    }
+    else if (node.operational()                 == false &&
+             node.leave_message()               == 0     &&
+             (msg.flags() & Message::F_RETRANS) == 0)
     {
         // We have set this node unoperational and there was
         // probably good reason to do so. Don't accept messages
@@ -2395,7 +2472,7 @@ void gcomm::evs::Proto::handle_msg(const Message& msg,
             << "dropping non-membership message from foreign view";
         return;
     }
-    else if (NodeMap::value(ii).index() == std::numeric_limits<size_t>::max() &&
+    else if (NodeMap::value(ii).index() == Node::invalid_index &&
              msg.source_view_id()       == current_view_.id())
     {
         log_warn << "Message from node that claims to come from same view but is not in current view " << msg;
@@ -2438,67 +2515,63 @@ void gcomm::evs::Proto::handle_msg(const Message& msg,
 // Protolay interface
 ////////////////////////////////////////////////////////////////////////
 
-size_t gcomm::evs::Proto::unserialize_message(const UUID& source,
-                                              const Datagram& rb,
-                                              Message* msg)
+std::pair<std::unique_ptr<gcomm::evs::Message>, size_t>
+gcomm::evs::Proto::unserialize_message(const UUID& source, const Datagram& rb)
 {
-    size_t offset;
+    size_t offset = 0;
     const gu::byte_t* begin(gcomm::begin(rb));
     const size_t available(gcomm::available(rb));
-    gu_trace(offset = msg->unserialize(begin,
-                                       available,
-                                       0));
-    if ((msg->flags() & Message::F_SOURCE) == 0)
+    std::unique_ptr<Message> ret;
+    switch (Message::get_type(begin, available, offset))
+    {
+    case Message::EVS_T_NONE: gu_throw_fatal; break;
+    case Message::EVS_T_USER:
+        ret = std::unique_ptr<UserMessage>(new UserMessage);
+        gu_trace(offset = ret->unserialize(begin, available, offset));
+        break;
+    case Message::EVS_T_DELEGATE:
+        ret = std::unique_ptr<DelegateMessage>(new DelegateMessage);
+        gu_trace(offset = ret->unserialize(begin, available, offset));
+        break;
+    case Message::EVS_T_GAP:
+        ret = std::unique_ptr<GapMessage>(new GapMessage);
+        gu_trace(offset = ret->unserialize(begin, available, offset));
+        break;
+    case Message::EVS_T_JOIN:
+        ret = std::unique_ptr<JoinMessage>(new JoinMessage);
+        gu_trace(offset = ret->unserialize(begin, available, offset));
+        break;
+    case Message::EVS_T_INSTALL:
+        ret = std::unique_ptr<InstallMessage>(new InstallMessage);
+        gu_trace(offset = ret->unserialize(begin, available, offset));
+        break;
+    case Message::EVS_T_LEAVE:
+        ret = std::unique_ptr<LeaveMessage>(new LeaveMessage);
+        gu_trace(offset = ret->unserialize(begin, available, offset));
+        break;
+    case Message::EVS_T_DELAYED_LIST:
+        ret = std::unique_ptr<DelayedListMessage>(new DelayedListMessage);
+        gu_trace(offset = ret->unserialize(begin, available, offset));
+        break;
+    default:
+        return {std::unique_ptr<Message>{}, 0};
+    }
+
+    /* Message did not have source field, must be set from source reported
+       by the lower layer. */
+    if ((ret->flags() & Message::F_SOURCE) == 0)
     {
         assert(source != UUID::nil());
         gcomm_assert(source != UUID::nil());
-        msg->set_source(source);
+        ret->set_source(source);
     }
 
-    switch (msg->type())
-    {
-    case Message::EVS_T_NONE:
-        gu_throw_fatal;
-        break;
-    case Message::EVS_T_USER:
-        gu_trace(offset = static_cast<UserMessage&>(*msg).unserialize(
-                     begin, available, offset, true));
-        break;
-    case Message::EVS_T_DELEGATE:
-        gu_trace(offset = static_cast<DelegateMessage&>(*msg).unserialize(
-                     begin, available, offset, true));
-        break;
-    case Message::EVS_T_GAP:
-        gu_trace(offset = static_cast<GapMessage&>(*msg).unserialize(
-                     begin, available, offset, true));
-        break;
-    case Message::EVS_T_JOIN:
-        gu_trace(offset = static_cast<JoinMessage&>(*msg).unserialize(
-                     begin, available, offset, true));
-        break;
-    case Message::EVS_T_INSTALL:
-        gu_trace(offset = static_cast<InstallMessage&>(*msg).unserialize(
-                     begin, available, offset, true));
-        break;
-    case Message::EVS_T_LEAVE:
-        gu_trace(offset = static_cast<LeaveMessage&>(*msg).unserialize(
-                     begin, available, offset, true));
-        break;
-    case Message::EVS_T_DELAYED_LIST:
-        gu_trace(offset = static_cast<DelayedListMessage&>(*msg).unserialize(
-                     begin, available, offset, true));
-        break;
-    }
-    return (offset + rb.offset());
+    return {std::move(ret), offset + rb.offset()};
 }
 
-void gcomm::evs::Proto::handle_up(const void* cid,
-                                  const Datagram& rb,
+void gcomm::evs::Proto::handle_up(const void* cid, const Datagram& rb,
                                   const ProtoUpMeta& um)
 {
-
-    Message msg;
-
     if (state() == S_CLOSED || um.source() == uuid() || is_evicted(um.source()))
     {
         // Silent drop
@@ -2507,12 +2580,16 @@ void gcomm::evs::Proto::handle_up(const void* cid,
 
     gcomm_assert(um.source() != UUID::nil());
 
+    std::pair<std::unique_ptr<Message>, size_t> msg;
     try
     {
-        size_t offset;
-        gu_trace(offset = unserialize_message(um.source(), rb, &msg));
-        handle_msg(msg, Datagram(rb, offset),
-                   (msg.flags() & Message::F_RETRANS) == 0);
+        gu_trace(msg = unserialize_message(um.source(), rb));
+        if (not msg.first) {
+            /* Message could not be serialized. */
+            return;
+        }
+        handle_msg(*msg.first, Datagram(rb, msg.second),
+                   (msg.first->flags() & Message::F_RETRANS) == 0);
     }
     catch (gu::Exception& e)
     {
@@ -2523,11 +2600,11 @@ void gcomm::evs::Proto::handle_up(const void* cid,
             break;
 
         case EINVAL:
-            log_warn << "invalid message: " << msg;
+            log_warn << "invalid message: " << *msg.first;
             break;
 
         default:
-            log_fatal << "exception caused by message: " << msg;
+            log_fatal << "exception caused by message: " << *msg.first;
             std::cerr << " state after handling message: " << *this;
             throw;
         }
@@ -2544,13 +2621,12 @@ int gcomm::evs::Proto::handle_down(Datagram& wb, const ProtoDownMeta& dm)
 
     else if (state() != S_OPERATIONAL)
     {
-        log_warn << "user message in state " << to_string(state());
         return ENOTCONN;
     }
 
     if (dm.order() == O_LOCAL_CAUSAL)
     {
-        gu::datetime::Date now(gu::datetime::Date::now());
+        gu::datetime::Date now(gu::datetime::Date::monotonic());
         if (causal_queue_.empty() == true &&
             last_sent_ == input_map_->safe_seq() &&
             causal_keepalive_period_ > gu::datetime::Period(0) &&
@@ -2575,7 +2651,7 @@ int gcomm::evs::Proto::handle_down(Datagram& wb, const ProtoDownMeta& dm)
                     input_map_->is_safe(input_map_->begin()) == true)
                 {
                     // If the input map state is still not good for fast path,
-                    // the situation is not likely to clear immediately. Retur
+                    // the situation is not likely to clear immediately. Return
                     // error to retry later.
                     return EAGAIN;
                 }
@@ -2610,6 +2686,13 @@ int gcomm::evs::Proto::handle_down(Datagram& wb, const ProtoDownMeta& dm)
         return 0;
     }
 
+    // Limit outbound bytes to out_queue::max_outbound_bytes (1MB)
+    // to limit the time it takes to transmit all outbound messages
+    // during configuration change.
+    if (output_.outbound_bytes() >= out_queue::max_outbound_bytes)
+    {
+        return EAGAIN;
+    }
 
     send_queue_s_ += output_.size();
     ++n_send_queue_s_;
@@ -2638,14 +2721,11 @@ int gcomm::evs::Proto::handle_down(Datagram& wb, const ProtoDownMeta& dm)
             ret = err;
         }
     }
-    else if (output_.size() < max_output_size_)
+    else
     {
         output_.push_back(std::make_pair(wb, dm));
     }
-    else
-    {
-        ret = EAGAIN;
-    }
+
     return ret;
 }
 
@@ -2748,6 +2828,7 @@ void gcomm::evs::Proto::shift_to(const State s, const bool send_j)
     }
     case S_JOINING:
         state_ = S_JOINING;
+        reset_timer(T_RETRANS);
         reset_timer(T_STATS);
         break;
     case S_LEAVING:
@@ -2765,7 +2846,6 @@ void gcomm::evs::Proto::shift_to(const State s, const bool send_j)
 
         if (state() == S_OPERATIONAL)
         {
-            profile_enter(send_user_prof_);
             while (output_.empty() == false)
             {
                 int err;
@@ -2778,7 +2858,6 @@ void gcomm::evs::Proto::shift_to(const State s, const bool send_j)
                                    << strerror(err);
                 }
             }
-            profile_leave(send_user_prof_);
         }
         else
         {
@@ -2789,9 +2868,7 @@ void gcomm::evs::Proto::shift_to(const State s, const bool send_j)
         state_ = S_GATHER;
         if (send_j == true)
         {
-            profile_enter(send_join_prof_);
             gu_trace(send_join(false));
-            profile_leave(send_join_prof_);
         }
         gcomm_assert(state() == S_GATHER);
         reset_timer(T_INACTIVITY);
@@ -2879,7 +2956,7 @@ void gcomm::evs::Proto::shift_to(const State s, const bool send_j)
             else
             {
                 NodeMap::value(nmi).set_index(
-                    std::numeric_limits<size_t>::max());
+                    Node::invalid_index);
             }
 
         }
@@ -2905,9 +2982,7 @@ void gcomm::evs::Proto::shift_to(const State s, const bool send_j)
         install_message_ = 0;
         attempt_seq_ = 1;
         install_timeout_count_ = 0;
-        profile_enter(send_gap_prof_);
         gu_trace(send_gap(EVS_CALLER, UUID::nil(), current_view_.id(), Range()));;
-        profile_leave(send_gap_prof_);
         gcomm_assert(state() == S_OPERATIONAL);
         reset_timer(T_INACTIVITY);
         reset_timer(T_RETRANS);
@@ -2943,7 +3018,7 @@ void gcomm::evs::Proto::deliver_local(bool trans)
 {
     // local causal
     const seqno_t causal_seq(trans == false ? input_map_->safe_seq() : last_sent_);
-    gu::datetime::Date now(gu::datetime::Date::now());
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
 
     assert(input_map_->begin() == input_map_->end() ||
            input_map_->is_safe(input_map_->begin()) == false);
@@ -2972,7 +3047,7 @@ void gcomm::evs::Proto::validate_reg_msg(const UserMessage& msg)
     {
         if (msg.order() == O_SAFE)
         {
-            gu::datetime::Date now(gu::datetime::Date::now());
+            gu::datetime::Date now(gu::datetime::Date::monotonic());
             double lat(double(now.get_utc() - msg.tstamp().get_utc())/
                        gu::datetime::Sec);
             if (info_mask_ & I_STATISTICS) hs_safe_.insert(lat);
@@ -2982,7 +3057,7 @@ void gcomm::evs::Proto::validate_reg_msg(const UserMessage& msg)
         {
             if (info_mask_ & I_STATISTICS)
             {
-                gu::datetime::Date now(gu::datetime::Date::now());
+                gu::datetime::Date now(gu::datetime::Date::monotonic());
                 hs_agreed_.insert(double(now.get_utc() - msg.tstamp().get_utc())/gu::datetime::Sec);
             }
         }
@@ -2998,7 +3073,6 @@ void gcomm::evs::Proto::deliver_finish(const InputMapMsg& msg)
         if (msg.msg().order() != O_DROP)
         {
             gu_trace(validate_reg_msg(msg.msg()));
-            profile_enter(delivery_prof_);
             ProtoUpMeta um(msg.msg().source(),
                            msg.msg().source_view_id(),
                            0,
@@ -3014,7 +3088,6 @@ void gcomm::evs::Proto::deliver_finish(const InputMapMsg& msg)
                 log_info << msg.msg() << " " << msg.rb().len();
                 throw;
             }
-            profile_leave(delivery_prof_);
         }
     }
     else
@@ -3025,16 +3098,16 @@ void gcomm::evs::Proto::deliver_finish(const InputMapMsg& msg)
         {
             ++delivered_msgs_[msg.msg().order()];
             AggregateMessage am;
-            gu_trace(am.unserialize(&msg.rb().payload()[0],
+            gu_trace(am.unserialize(msg.rb().payload().data(),
                                     msg.rb().payload().size(),
                                     offset));
             Datagram dg(
                 gu::SharedBuffer(
                     new gu::Buffer(
-                        &msg.rb().payload()[0]
+                        msg.rb().payload().data()
                         + offset
                         + am.serial_size(),
-                        &msg.rb().payload()[0]
+                        msg.rb().payload().data()
                         + offset
                         + am.serial_size()
                         + am.len())));
@@ -3230,6 +3303,370 @@ gcomm::evs::seqno_t gcomm::evs::Proto::update_im_safe_seq(const size_t uuid,
     return im_safe_seq;
 }
 
+void gcomm::evs::Proto::send_request_retrans_gap(const UUID& target,
+                                                 const UUID& origin,
+                                                 const Range& range)
+{
+    GapMessage gm(version_,
+                  uuid(),
+                  current_view_.id(),
+                  last_sent_,
+                  input_map_->aru_seq(),
+                  ++fifo_seq_,
+                  origin,
+                  range,
+                  Message::F_RETRANS);
+    gu::Buffer buf;
+    serialize(gm, buf);
+    Datagram dg(buf);
+    int err = send_down(dg, ProtoDownMeta(target));
+    if (err != 0)
+    {
+        log_debug << "send failed: " << strerror(err);
+    }
+    sent_msgs_[Message::EVS_T_GAP]++;
+}
+
+void gcomm::evs::Proto::request_retrans(const UUID& target, const UUID& origin,
+                                        const Range& range)
+{
+    NodeMap::const_iterator origin_node_i(known_.find(origin));
+    assert(origin_node_i != known_.end());
+    if (origin_node_i == known_.end())
+    {
+        log_warn << "Origin " << origin << " not found from known nodes";
+        return;
+    }
+    const Node& origin_node(NodeMap::value(origin_node_i));
+    if (origin_node.index() == Node::invalid_index)
+    {
+        log_warn << "Origin " << origin << " has no index";
+        return;
+    }
+    if (not gap_rate_limit(target, range))
+    {
+        evs_log_debug(D_RETRANS) << self_string()
+                                 << " requesting retrans from " << target
+                                 << " origin " << origin
+                                 << " range " << range
+                                 << " due to input map gap, aru "
+                                 << input_map_->aru_seq();
+        std::vector<Range> gap_ranges(input_map_->gap_range_list(
+                                          origin_node.index(), range));
+        for (std::vector<Range>::const_iterator ri(gap_ranges.begin());
+             ri != gap_ranges.end(); ++ri)
+        {
+            evs_log_debug(D_RETRANS)
+                << "Requesting retransmssion from " << target
+                << " origin: " << origin
+                << " range: " << *ri;
+            send_request_retrans_gap(target, origin, *ri);
+        }
+        NodeMap::iterator target_i(known_.find(target));
+        if (target_i != known_.end())
+        {
+            target_i->second.last_requested_range(range);
+        }
+    }
+}
+
+// Select suitable node for recovering missing messages. The node
+// is chosen to be one with join message originating from the same
+// view and highest lowest unseen for origin.
+
+struct SelectRecoveryNodeForMissingResult
+{
+    gcomm::evs::seqno_t lowest_unseen;
+    gcomm::UUID target;
+    SelectRecoveryNodeForMissingResult()
+        : lowest_unseen(-1)
+        , target()
+    { }
+};
+
+class SelectRecoveryNodeForMissing
+{
+public:
+    SelectRecoveryNodeForMissing(const gcomm::evs::Proto& evs,
+                                 const gcomm::UUID& origin,
+                                 const gcomm::ViewId& view_id,
+                                 SelectRecoveryNodeForMissingResult&
+                                 result /* Out parameter */)
+        : evs_(evs)
+        , origin_(origin)
+        , view_id_(view_id)
+        , result_(result)
+    { }
+
+    void operator()(const gcomm::evs::NodeMap::value_type& node_v)
+    {
+        // Do not try to recover from self.
+        if (evs_.uuid() == node_v.first) return;
+
+        if (node_v.second.operational())
+        {
+            gcomm::evs::seqno_t lu(get_lu_for(origin_, node_v.second));
+            if (lu > result_.lowest_unseen)
+            {
+                result_.lowest_unseen = lu;
+                result_.target = node_v.first;
+            }
+        }
+    }
+
+private:
+    gcomm::evs::seqno_t get_lu_from_join_for(const gcomm::UUID& origin,
+                                             const gcomm::evs::JoinMessage& jm)
+    {
+        gcomm::evs::MessageNodeList::const_iterator origin_i(
+            jm.node_list().find(origin));
+        if (origin_i != jm.node_list().end())
+        {
+            return origin_i->second.im_range().lu();
+        }
+        return -1;
+    }
+
+    gcomm::evs::seqno_t get_lu_for(const gcomm::UUID& origin,
+                                   const gcomm::evs::Node& node)
+    {
+        const gcomm::evs::JoinMessage* jm(node.join_message());
+        // No join message received
+        if (not jm) return -1;
+        // Not in the same view
+        if (jm->source_view_id() != view_id_) return -1;
+        return get_lu_from_join_for(origin, *jm);
+    }
+
+    const gcomm::evs::Proto& evs_;
+    const gcomm::UUID& origin_;
+    const gcomm::ViewId& view_id_;
+    SelectRecoveryNodeForMissingResult& result_; // Reference to out parameter
+};
+
+void gcomm::evs::Proto::request_missing()
+{
+    // This method should be called only during configuration changes.
+    // In operational state requests should be done based on
+    // detected gaps and on delayed node checks.
+    assert(state() != S_OPERATIONAL);
+    for (NodeMap::const_iterator node_i(known_.begin()); node_i != known_.end();
+         ++node_i)
+    {
+        const UUID& origin(node_i->first);
+        if (origin == my_uuid_) continue; // No need to request from self.
+        const Node& node(node_i->second);
+        // Node has no index assigned, so it was not in the current group.
+        if (node.index() == Node::invalid_index) continue;
+
+        Range range(input_map_->range(node.index()));
+        if ((not range.is_empty() || range.hs() < last_sent_) &&
+            (node.leave_message() == 0 ||
+             node.leave_message()->seq() > range.hs()))
+        {
+            // Missing messages from node. If it is still considerd operational,
+            // send a retransimission request to it. Otherwise locate some
+            // other node to recover the missing messages.
+            if (node.operational())
+            {
+                const Range request_range(range.lu(), last_sent_);
+                if (not request_range.is_empty())
+                {
+                    request_retrans(origin, origin, request_range);
+                }
+            }
+            else
+            {
+                // Try to find suitable node to recover the missing messages
+                // from origin.
+                SelectRecoveryNodeForMissingResult result;
+                std::for_each(known_.begin(), known_.end(),
+                              SelectRecoveryNodeForMissing(
+                                  *this, origin, current_view_.id(), result));
+                // If the target node was found, it has messages up to
+                // result.lowest_unseen - 1 from origin.
+                const Range request_range(range.lu(), result.lowest_unseen - 1);
+                if (result.target != UUID::nil() && not request_range.is_empty())
+                {
+                    request_retrans(result.target, origin, request_range);
+                }
+                else
+                {
+                    evs_log_debug(D_RETRANS)
+                        << "Could not find a node to recover messages "
+                        << "from, missing from " << origin
+                        << " range: " << range
+                        << " last_sent: " << last_sent_;
+                }
+            }
+        }
+    }
+}
+
+class ResendMissingRanges
+{
+public:
+    ResendMissingRanges(gcomm::evs::Proto& evs,
+                        gcomm::evs::seqno_t last_sent,
+                        const gcomm::ViewId& view_id)
+        : evs_(evs)
+        , last_sent_(last_sent)
+        , view_id_(view_id)
+    { }
+
+    void operator()(const gcomm::evs::NodeMap::value_type& node_v)
+    {
+        if (node_v.first == evs_.uuid()) return; // No need to inspect self
+
+        const gcomm::evs::JoinMessage* jm(node_v.second.join_message());
+        if (jm && jm->source_view_id() == view_id_)
+        {
+            resend_missing_from_join_message(*jm);
+        }
+
+        const gcomm::evs::LeaveMessage* lm(node_v.second.leave_message());
+        if (lm && lm->source_view_id() == view_id_)
+        {
+            resend_missing_from_leave_message(*lm);
+        }
+    }
+
+private:
+    void resend_missing_from_join_message(const gcomm::evs::JoinMessage& jm)
+    {
+        gcomm::evs::MessageNodeList::const_iterator self_i(
+            jm.node_list().find(evs_.uuid()));
+        if (self_i == jm.node_list().end())
+        {
+            log_warn << "Node join message claims to be from the same "
+                     << "view but does not list this node, "
+                     << "own uuid: " << evs_.uuid()
+                     << " join message: " << jm;
+            return;
+        }
+        if (self_i->second.im_range().lu() <= last_sent_)
+        {
+            evs_.resend(jm.source(),
+                        gcomm::evs::Range(self_i->second.im_range().lu(),
+                                          last_sent_));
+        }
+    }
+
+    void resend_missing_from_leave_message(const gcomm::evs::LeaveMessage& lm)
+    {
+        if (lm.aru_seq() < last_sent_)
+        {
+            evs_.resend(lm.source(),
+                        gcomm::evs::Range(lm.aru_seq() + 1, last_sent_));
+        }
+    }
+
+    gcomm::evs::Proto& evs_;
+    const gcomm::evs::seqno_t last_sent_;
+    const gcomm::ViewId& view_id_;
+};
+
+void gcomm::evs::Proto::retrans_missing()
+{
+    // This method should be called only during configuration changes.
+    // In operational state retransmits should happen only by
+    // responding to retrans request Gap messages.
+    assert(state() != S_OPERATIONAL);
+
+    // Iterate over join messages and retransmit is some nodes
+    // have not received all messages.
+    ResendMissingRanges resend_missing(*this, last_sent_, current_view_.id());
+    std::for_each(known_.begin(), known_.end(), resend_missing);
+}
+
+void gcomm::evs::Proto::handle_user_from_different_view(
+    const Node& source_node, const UserMessage& msg)
+{
+    if (state() == S_LEAVING)
+    {
+        // Silent drop
+        return;
+    }
+
+    if (is_msg_from_previous_view(msg) == true)
+    {
+        evs_log_debug(D_FOREIGN_MSGS) << "user message "
+                                      << msg
+                                      << " from previous view";
+        return;
+    }
+
+    if (source_node.operational() == false)
+    {
+        evs_log_debug(D_STATE)
+            << "dropping message from unoperational source "
+            << msg.source();
+    }
+    else if (source_node.installed() == false)
+    {
+        if (install_message_ != 0 &&
+            msg.source_view_id() == install_message_->install_view_id())
+        {
+            assert(state() == S_GATHER || state() == S_INSTALL);
+            evs_log_debug(D_STATE) << " recovery user message "
+                                   << msg;
+
+            // This is possible if install timer expires just before
+            // new view is established on this source_node and retransmitted
+            // install message is received just before user this message.
+            if (state() == S_GATHER)
+            {
+                // Sanity check
+                MessageNodeList::const_iterator self(
+                    install_message_->node_list().find(uuid()));
+                gcomm_assert(self != install_message_->node_list().end()
+                             && MessageNodeList::value(self).operational() == true);
+                // Mark all operational nodes in install message as
+                // committed
+                for (MessageNodeList::const_iterator
+                         mi = install_message_->node_list().begin();
+                     mi != install_message_->node_list().end(); ++mi)
+                {
+                    if (MessageNodeList::value(mi).operational() == true)
+                    {
+                        NodeMap::iterator jj;
+                        gu_trace(jj = known_.find_checked(
+                                     MessageNodeList::key(mi)));
+                        NodeMap::value(jj).set_committed(true);
+                    }
+                }
+                shift_to(S_INSTALL);
+            }
+
+            // Other instances installed view before this one, so it is
+            // safe to shift to S_OPERATIONAL
+
+            // Mark all operational nodes in install message as installed
+            for (MessageNodeList::const_iterator
+                     mi = install_message_->node_list().begin();
+                 mi != install_message_->node_list().end(); ++mi)
+            {
+                if (MessageNodeList::value(mi).operational() == true)
+                {
+                    NodeMap::iterator jj;
+                    gu_trace(jj = known_.find_checked(
+                                 MessageNodeList::key(mi)));
+                    NodeMap::value(jj).set_installed(true);
+                }
+            }
+
+            gu_trace(shift_to(S_OPERATIONAL));
+            if (pending_leave_ == true)
+            {
+                close();
+            }
+        }
+    }
+    else
+    {
+        log_debug << self_string() << " unhandled user message " << msg;
+    }
+}
 
 void gcomm::evs::Proto::handle_user(const UserMessage& msg,
                                     NodeMap::iterator ii,
@@ -3244,126 +3681,29 @@ void gcomm::evs::Proto::handle_user(const UserMessage& msg,
 
     if (msg.source_view_id() != current_view_.id())
     {
-        if (state() == S_LEAVING)
+        handle_user_from_different_view(inst, msg);
+        // Handling user message from different view may cause shift
+        // to operational or leaving state. Check the view ID again and if it
+        // matches to current view proceed to handling the message.
+        if (msg.source_view_id() != current_view_.id())
         {
-            // Silent drop
             return;
         }
-
-        if (is_msg_from_previous_view(msg) == true)
-        {
-            evs_log_debug(D_FOREIGN_MSGS) << "user message "
-                                          << msg
-                                          << " from previous view";
-            return;
-        }
-
-        if (inst.operational() == false)
-        {
-            evs_log_debug(D_STATE)
-                << "dropping message from unoperational source "
-                << msg.source();
-            return;
-        }
-        else if (inst.installed() == false)
-        {
-            if (install_message_ != 0 &&
-                msg.source_view_id() == install_message_->install_view_id())
-            {
-                assert(state() == S_GATHER || state() == S_INSTALL);
-                evs_log_debug(D_STATE) << " recovery user message "
-                                       << msg;
-
-                // This is possible if install timer expires just before
-                // new view is established on this node and retransmitted
-                // install message is received just before user this message.
-                if (state() == S_GATHER)
-                {
-                    // Sanity check
-                    MessageNodeList::const_iterator self(
-                        install_message_->node_list().find(uuid()));
-                    gcomm_assert(self != install_message_->node_list().end()
-                                 && MessageNodeList::value(self).operational() == true);
-                    // Mark all operational nodes in install message as
-                    // committed
-                    for (MessageNodeList::const_iterator
-                             mi = install_message_->node_list().begin();
-                         mi != install_message_->node_list().end(); ++mi)
-                    {
-                        if (MessageNodeList::value(mi).operational() == true)
-                        {
-                            NodeMap::iterator jj;
-                            gu_trace(jj = known_.find_checked(
-                                         MessageNodeList::key(mi)));
-                            NodeMap::value(jj).set_committed(true);
-                        }
-                    }
-                    shift_to(S_INSTALL);
-                }
-
-                // Other instances installed view before this one, so it is
-                // safe to shift to S_OPERATIONAL
-
-                // Mark all operational nodes in install message as installed
-                for (MessageNodeList::const_iterator
-                         mi = install_message_->node_list().begin();
-                     mi != install_message_->node_list().end(); ++mi)
-                {
-                    if (MessageNodeList::value(mi).operational() == true)
-                    {
-                        NodeMap::iterator jj;
-                        gu_trace(jj = known_.find_checked(
-                                     MessageNodeList::key(mi)));
-                        NodeMap::value(jj).set_installed(true);
-                    }
-                }
-                inst.set_tstamp(gu::datetime::Date::now());
-
-                profile_enter(shift_to_prof_);
-                gu_trace(shift_to(S_OPERATIONAL));
-                profile_leave(shift_to_prof_);
-                if (pending_leave_ == true)
-                {
-                    close();
-                }
-                // proceed to process actual user message
-            }
-            else
-            {
-                return;
-            }
-        }
-        else
-        {
-            log_debug << self_string() << " unhandled user message " << msg;
-            return;
-        }
+        assert(state() == S_OPERATIONAL || state() == S_LEAVING);
     }
 
-    gcomm_assert(msg.source_view_id() == current_view_.id());
-
-
-    // note: #gh40
-    bool shift_to_gather = false;
-    if (install_message_) {
-        const MessageNode& mn(
-            MessageNodeList::value(
-                install_message_->node_list().find_checked(
-                    msg.source())));
-        if (!mn.operational())
-            return ;
-        if (mn.operational() &&
-            msg.seq() > mn.im_range().hs()) {
-            shift_to_gather = true;
-        }
+    if (install_message_)
+    {
+        // Install message has been received, which means that the
+        // members of the group already got into agreement about the
+        // set of delivered messages.
+        return;
     }
 
     Range range;
     Range prev_range;
     seqno_t prev_aru;
     seqno_t prev_safe;
-
-    profile_enter(input_map_prof_);
 
     prev_aru = input_map_->aru_seq();
     prev_range = input_map_->range(inst.index());
@@ -3376,11 +3716,24 @@ void gcomm::evs::Proto::handle_user(const UserMessage& msg,
         gu_trace(range = input_map_->insert(inst.index(), msg, im_dgram));
         if (range.lu() > prev_range.lu())
         {
-            inst.set_tstamp(gu::datetime::Date::now());
+            inst.set_tstamp(gu::datetime::Date::monotonic());
+        }
+        else
+        {
+            evs_log_debug(D_USER_MSGS)
+                << "Not timestamping due to user msg: range.lu: "
+                << range.lu()
+                << " prev_range.lu(): "
+                << prev_range.lu();
         }
     }
     else
     {
+        evs_log_debug(D_USER_MSGS)
+            << "Not timestamping due to user msg: msg.seq: "
+            << msg.seq()
+            << " prev_range.lu(): "
+            << prev_range.lu();
         range = prev_range;
     }
 
@@ -3391,20 +3744,11 @@ void gcomm::evs::Proto::handle_user(const UserMessage& msg,
     // Update safe seq for message source
     prev_safe = update_im_safe_seq(inst.index(), msg.aru_seq());
 
-    profile_leave(input_map_prof_);
-
     // Check for missing messages
-    if (range.hs()                         >  range.lu() &&
-        (msg.flags() & Message::F_RETRANS) == 0                 )
+    if (range.hs() >  range.lu() &&
+        (msg.flags() & Message::F_RETRANS) == 0)
     {
-        evs_log_debug(D_RETRANS) << " requesting retrans from "
-                                 << msg.source() << " "
-                                 << range
-                                 << " due to input map gap, aru "
-                                 << input_map_->aru_seq();
-        profile_enter(send_gap_prof_);
-        gu_trace(send_gap(EVS_CALLER, msg.source(), current_view_.id(), range));
-        profile_leave(send_gap_prof_);
+        request_retrans(msg.source(), msg.source(), range);
     }
 
     // Seqno range completion and acknowledgement
@@ -3423,16 +3767,13 @@ void gcomm::evs::Proto::handle_user(const UserMessage& msg,
     {
         // Output queue empty and aru changed, send gap to inform others
         evs_log_debug(D_GAP_MSGS) << "sending empty gap";
-        profile_enter(send_gap_prof_);
         gu_trace(send_gap(EVS_CALLER, UUID::nil(), current_view_.id(), Range()));
-        profile_leave(send_gap_prof_);
     }
 
     // Send messages
     if (state() == S_OPERATIONAL)
     {
         size_t n_sent(0);
-        profile_enter(send_user_prof_);
         while (output_.empty() == false)
         {
             int err;
@@ -3453,14 +3794,11 @@ void gcomm::evs::Proto::handle_user(const UserMessage& msg,
                 ++n_sent;
             }
         }
-        profile_leave(send_user_prof_);
     }
 
     // Deliver messages
-    profile_enter(delivery_prof_);
     gu_trace(deliver());
     gu_trace(deliver_local());
-    profile_leave(delivery_prof_);
 
     // If in recovery state, send join each time input map aru seq reaches
     // last sent and either input map aru or safe seq has changed.
@@ -3473,16 +3811,10 @@ void gcomm::evs::Proto::handle_user(const UserMessage& msg,
         gcomm_assert(output_.empty() == true);
         if (consensus_.is_consensus() == false)
         {
-            profile_enter(send_join_prof_);
             gu_trace(send_join());
-            profile_leave(send_join_prof_);
         }
     }
-    if (shift_to_gather) {
-        shift_to(S_GATHER, true);
-    }
 }
-
 
 void gcomm::evs::Proto::handle_delegate(const DelegateMessage& msg,
                                         NodeMap::iterator ii,
@@ -3490,12 +3822,13 @@ void gcomm::evs::Proto::handle_delegate(const DelegateMessage& msg,
 {
     gcomm_assert(ii != known_.end());
     evs_log_debug(D_DELEGATE_MSGS) << "delegate message " << msg;
-    Message umsg;
-    size_t offset;
-    gu_trace(offset = unserialize_message(UUID::nil(), rb, &umsg));
-    gu_trace(handle_msg(umsg, Datagram(rb, offset), false));
+    std::pair<std::unique_ptr<Message>, size_t> umsg;
+    gu_trace(umsg = unserialize_message(UUID::nil(), rb));
+    if (not umsg.first) {
+        return;
+    }
+    gu_trace(handle_msg(*umsg.first, Datagram(rb, umsg.second), false));
 }
-
 
 void gcomm::evs::Proto::handle_gap(const GapMessage& msg, NodeMap::iterator ii)
 {
@@ -3515,7 +3848,7 @@ void gcomm::evs::Proto::handle_gap(const GapMessage& msg, NodeMap::iterator ii)
             install_message_->fifo_seq()        == msg.seq())
         {
             inst.set_committed(true);
-            inst.set_tstamp(gu::datetime::Date::now());
+            inst.set_tstamp(gu::datetime::Date::monotonic());
             if (is_all_committed() == true)
             {
                 shift_to(S_INSTALL);
@@ -3544,12 +3877,10 @@ void gcomm::evs::Proto::handle_gap(const GapMessage& msg, NodeMap::iterator ii)
     {
         evs_log_debug(D_STATE) << "install gap " << msg;
         inst.set_installed(true);
-        inst.set_tstamp(gu::datetime::Date::now());
+        inst.set_tstamp(gu::datetime::Date::monotonic());
         if (is_all_installed() == true)
         {
-            profile_enter(shift_to_prof_);
             gu_trace(shift_to(S_OPERATIONAL));
-            profile_leave(shift_to_prof_);
             if (pending_leave_ == true)
             {
                 close();
@@ -3595,16 +3926,14 @@ void gcomm::evs::Proto::handle_gap(const GapMessage& msg, NodeMap::iterator ii)
     //
     seqno_t prev_safe;
 
-    profile_enter(input_map_prof_);
     prev_safe = update_im_safe_seq(inst.index(), msg.aru_seq());
 
     // Deliver messages and update tstamp only if safe_seq changed
     // for the source.
     if (prev_safe != input_map_->safe_seq(inst.index()))
     {
-        inst.set_tstamp(gu::datetime::Date::now());
+        inst.set_tstamp(gu::datetime::Date::monotonic());
     }
-    profile_leave(input_map_prof_);
 
     //
     if (msg.range_uuid() == uuid())
@@ -3635,7 +3964,6 @@ void gcomm::evs::Proto::handle_gap(const GapMessage& msg, NodeMap::iterator ii)
     {
         if (output_.empty() == false)
         {
-            profile_enter(send_user_prof_);
             while (output_.empty() == false)
             {
                 int err;
@@ -3643,7 +3971,6 @@ void gcomm::evs::Proto::handle_gap(const GapMessage& msg, NodeMap::iterator ii)
                 if (err != 0)
                     break;
             }
-            profile_leave(send_user_prof_);
         }
         else
         {
@@ -3655,10 +3982,8 @@ void gcomm::evs::Proto::handle_gap(const GapMessage& msg, NodeMap::iterator ii)
         }
     }
 
-    profile_enter(delivery_prof_);
     gu_trace(deliver());
     gu_trace(deliver_local());
-    profile_leave(delivery_prof_);
 
     //
     if (state()                            == S_GATHER                  &&
@@ -3668,9 +3993,7 @@ void gcomm::evs::Proto::handle_gap(const GapMessage& msg, NodeMap::iterator ii)
         gcomm_assert(output_.empty() == true);
         if (consensus_.is_consensus() == false)
         {
-            profile_enter(send_join_prof_);
             gu_trace(send_join());
-            profile_leave(send_join_prof_);
         }
     }
 }
@@ -3699,39 +4022,6 @@ bool gcomm::evs::Proto::update_im_safe_seqs(const MessageNodeList& node_list)
     return updated;
 }
 
-
-void gcomm::evs::Proto::retrans_user(const UUID& nl_uuid,
-                                     const MessageNodeList& node_list)
-{
-    for (MessageNodeList::const_iterator i = node_list.begin();
-         i != node_list.end(); ++i)
-    {
-        const UUID& node_uuid(MessageNodeList::key(i));
-        const MessageNode& mn(MessageNodeList::value(i));
-        const Node& n(NodeMap::value(known_.find_checked(node_uuid)));
-        const Range r(input_map_->range(n.index()));
-
-        if (node_uuid == uuid() &&
-            mn.im_range().lu() != r.lu())
-        {
-            // Source member is missing messages from us
-            gcomm_assert(mn.im_range().hs() <= last_sent_);
-            gu_trace(resend(nl_uuid,
-                            Range(mn.im_range().lu(), last_sent_)));
-        }
-        else if ((mn.operational() == false ||
-                  mn.leaving() == true) &&
-                 node_uuid != uuid() &&
-                 (mn.im_range().lu() < r.lu() ||
-                  mn.im_range().hs() < r.hs()))
-        {
-            gu_trace(recover(nl_uuid, node_uuid,
-                             Range(mn.im_range().lu(),
-                                   r.hs())));
-        }
-    }
-}
-
 void gcomm::evs::Proto::retrans_leaves(const MessageNodeList& node_list)
 {
     for (NodeMap::const_iterator li = known_.begin(); li != known_.end(); ++li)
@@ -3758,7 +4048,7 @@ void gcomm::evs::Proto::retrans_leaves(const MessageNodeList& node_list)
                 gu::Buffer buf;
                 serialize(send_lm, buf);
                 Datagram dg(buf);
-                gu_trace(send_delegate(dg));
+                gu_trace(send_delegate(dg, UUID::nil()));
             }
         }
     }
@@ -3873,7 +4163,7 @@ void gcomm::evs::Proto::asymmetry_elimination()
 {
     // Allow some time to pass from setting install timers to get
     // join messages accumulated.
-    const gu::datetime::Date now(gu::datetime::Date::now());
+    const gu::datetime::Date now(gu::datetime::Date::monotonic());
     TimerList::const_iterator ti(
         find_if(timers_.begin(), timers_.end(), TimerSelectOp(T_INSTALL)));
 
@@ -4111,6 +4401,21 @@ void gcomm::evs::Proto::check_nil_view_id()
     }
 }
 
+bool gcomm::evs::Proto::join_rate_limit() const
+{
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
+    // Limit join message sending. It is likely that
+    // the transfer of user messages which were flushed into network
+    // in shift to GATHER state takes some time. Too frequent join message
+    // send will cause unwanted retransmits which will pile up in the
+    // socket send queue.
+    if (now < last_sent_join_tstamp_ + 100*gu::datetime::MSec)
+    {
+        evs_log_debug(D_JOIN_MSGS) << "join rate limit";
+        return true;
+    }
+    return false;
+}
 
 void gcomm::evs::Proto::handle_join(const JoinMessage& msg, NodeMap::iterator ii)
 {
@@ -4120,40 +4425,23 @@ void gcomm::evs::Proto::handle_join(const JoinMessage& msg, NodeMap::iterator ii
     Node& inst(NodeMap::value(ii));
 
     evs_log_debug(D_JOIN_MSGS) << " " << msg;
-
     if (state() == S_LEAVING)
     {
         if (msg.source_view_id() == current_view_.id())
         {
-            inst.set_tstamp(gu::datetime::Date::now());
+            inst.set_tstamp(gu::datetime::Date::monotonic());
+            // Join messages are needed for detecting gaps in message
+            // sequences on other nodes.
+            inst.set_join_message(&msg);
             MessageNodeList same_view;
             for_each(msg.node_list().begin(), msg.node_list().end(),
                      SelectNodesOp(same_view, current_view_.id(),
                                    true, true));
-            profile_enter(input_map_prof_);
             if (update_im_safe_seqs(same_view) == true)
             {
-                profile_enter(send_leave_prof_);
                 gu_trace(send_leave(false));
-                profile_leave(send_leave_prof_);
             }
-            for (NodeMap::const_iterator i = known_.begin(); i != known_.end();
-                 ++i)
-            {
-                const UUID& uuid(NodeMap::key(i));
-                const Node& node(NodeMap::value(i));
-                if (current_view_.is_member(uuid) == true)
-                {
-                    const Range r(input_map_->range(node.index()));
-                    if (r.lu() <= last_sent_)
-                    {
-                        send_gap(EVS_CALLER, uuid, current_view_.id(),
-                                 Range(r.lu(), last_sent_));
-                    }
-                }
-            }
-            profile_leave(input_map_prof_);
-            gu_trace(retrans_user(msg.source(), same_view));
+            request_missing();
         }
         return;
     }
@@ -4189,12 +4477,10 @@ void gcomm::evs::Proto::handle_join(const JoinMessage& msg, NodeMap::iterator ii
                         NodeMap::value(jj).set_installed(true);
                     }
                 }
-                inst.set_tstamp(gu::datetime::Date::now());
+                inst.set_tstamp(gu::datetime::Date::monotonic());
                 if (state() == S_INSTALL)
                 {
-                    profile_enter(shift_to_prof_);
                     gu_trace(shift_to(S_OPERATIONAL));
-                    profile_leave(shift_to_prof_);
                     if (pending_leave_ == true)
                     {
                         close();
@@ -4276,7 +4562,7 @@ void gcomm::evs::Proto::handle_join(const JoinMessage& msg, NodeMap::iterator ii
         const UUID mn_uuid(MessageNodeList::key(i));
         const MessageNode& mn(MessageNodeList::value(i));
         gather_views_.insert(std::make_pair(mn.view_id(),
-                                            gu::datetime::Date::now()));
+                                            gu::datetime::Date::monotonic()));
         if (ni == known_.end())
         {
             known_.insert_unique(
@@ -4301,7 +4587,7 @@ void gcomm::evs::Proto::handle_join(const JoinMessage& msg, NodeMap::iterator ii
     {
         if(MessageNodeList::value(self).operational() == true)
         {
-            inst.set_tstamp(gu::datetime::Date::now());
+            inst.set_tstamp(gu::datetime::Date::monotonic());
         }
         else
         {
@@ -4339,8 +4625,8 @@ void gcomm::evs::Proto::handle_join(const JoinMessage& msg, NodeMap::iterator ii
         }
     }
 
-    //
-    gu_trace(retrans_user(msg.source(), same_view));
+    // Request missing messages from other nodes.
+    request_missing();
     // Retrans leave messages that others are missing
     gu_trace(retrans_leaves(same_view));
 
@@ -4370,7 +4656,7 @@ void gcomm::evs::Proto::handle_join(const JoinMessage& msg, NodeMap::iterator ii
          curr_join->node_list() != new_nl))
     {
         gu_trace(create_join());
-        if (consensus_.is_consensus() == false)
+        if (consensus_.is_consensus() == false && not join_rate_limit())
         {
             send_join(false);
         }
@@ -4395,11 +4681,9 @@ void gcomm::evs::Proto::handle_leave(const LeaveMessage& msg,
     Node& node(NodeMap::value(ii));
     evs_log_debug(D_LEAVE_MSGS) << "leave message " << msg;
 
-    if (msg.source() != uuid() && node.is_inactive() == true)
-    {
-        evs_log_debug(D_LEAVE_MSGS) << "dropping leave from already inactive";
-        return;
-    }
+    // Leave messages must be always handled. They carry aru_seq information
+    // which is used to retrasmit missing messages.
+
     node.set_leave_message(&msg);
     if (msg.source() == uuid())
     {
@@ -4408,9 +4692,7 @@ void gcomm::evs::Proto::handle_leave(const LeaveMessage& msg,
         // leave message.
         if (current_view_.members().size() == 1)
         {
-            profile_enter(shift_to_prof_);
             gu_trace(shift_to(S_CLOSED));
-            profile_leave(shift_to_prof_);
         }
     }
     else
@@ -4427,23 +4709,19 @@ void gcomm::evs::Proto::handle_leave(const LeaveMessage& msg,
         const seqno_t prev_safe_seq(update_im_safe_seq(node.index(), msg.aru_seq()));
         if (prev_safe_seq != input_map_->safe_seq(node.index()))
         {
-            node.set_tstamp(gu::datetime::Date::now());
+            node.set_tstamp(gu::datetime::Date::monotonic());
         }
         if (state() == S_OPERATIONAL)
         {
-            profile_enter(shift_to_prof_);
             evs_log_info(I_STATE)
                 << " shift to GATHER when handling leave from "
                 << msg.source() << " " << msg.source_view_id();
             gu_trace(shift_to(S_GATHER, true));
-            profile_leave(shift_to_prof_);
         }
         else if (state() == S_GATHER &&
                  prev_safe_seq != input_map_->safe_seq(node.index()))
         {
-            profile_enter(send_join_prof_);
             gu_trace(send_join());
-            profile_leave(send_join_prof_);
         }
     }
 }
@@ -4470,9 +4748,7 @@ void gcomm::evs::Proto::handle_install(const InstallMessage& msg,
             const MessageNode& mn(MessageNodeList::value(mn_i));
             if (mn.operational() == false || mn.leaving() == true)
             {
-                profile_enter(shift_to_prof_);
                 gu_trace(shift_to(S_CLOSED));
-                profile_leave(shift_to_prof_);
             }
         }
         return;
@@ -4547,9 +4823,7 @@ void gcomm::evs::Proto::handle_install(const InstallMessage& msg,
     {
         log_warn << self_string()
                  << " shift to GATHER due to inconsistent state";
-        profile_enter(shift_to_prof_);
         gu_trace(shift_to(S_GATHER));
-        profile_leave(shift_to_prof_);
         return;
     }
 
@@ -4621,24 +4895,20 @@ void gcomm::evs::Proto::handle_install(const InstallMessage& msg,
     // nodes that will not be in the next view.
     if (consensus_.is_consistent(msg) == true)
     {
-        inst.set_tstamp(gu::datetime::Date::now());
+        inst.set_tstamp(gu::datetime::Date::monotonic());
         install_message_ = new InstallMessage(msg);
         assert(install_message_->source() != UUID::nil());
         assert(install_message_->flags() != 0);
-        profile_enter(send_gap_prof_);
         // Send commit gap
         gu_trace(send_gap(EVS_CALLER, UUID::nil(), install_message_->install_view_id(),
                           Range(), true));
-        profile_leave(send_gap_prof_);
     }
     else
     {
         evs_log_debug(D_INSTALL_MSGS)
             << "install message " << msg
             << " not consistent with state " << *this;
-        profile_enter(shift_to_prof_);
         gu_trace(shift_to(S_GATHER, true));
-        profile_leave(shift_to_prof_);
     }
 }
 
@@ -4654,7 +4924,7 @@ void gcomm::evs::Proto::handle_delayed_list(const DelayedListMessage& msg,
 
     Node& node(NodeMap::value(ii));
     node.set_delayed_list_message(&msg);
-    gu::datetime::Date now(gu::datetime::Date::now());
+    gu::datetime::Date now(gu::datetime::Date::monotonic());
 
     // Construct a list of evict candidates that appear in evict list messages
     // with cnt greater than local auto_evict_. If evict candidate is reported

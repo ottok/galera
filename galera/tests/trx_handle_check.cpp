@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2010-2017 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2020 Codership Oy <info@codership.com>
 //
 
 #include "trx_handle.hpp"
@@ -50,7 +50,7 @@ void check_states_graph(
 
     for (int i(0); i < TrxHandle::num_states_; ++i)
     {
-        fail_unless(visited[i] == visits[i],
+        ck_assert_msg(visited[i] == visits[i],
                     "i = %i visited = %i visits = %i",
                     i, visited[i], visits[i]);
     }
@@ -73,7 +73,7 @@ START_TEST(test_states_master)
                            TrxHandleMasterDeleter());
     galera::TrxHandleLock lock(*trx);
 
-    fail_unless(trx->state() == TrxHandle::S_EXECUTING);
+    ck_assert(trx->state() == TrxHandle::S_EXECUTING);
 
     // Matrix representing directed graph of TrxHandleMaster transitions,
     // see galera/src/trx_handle.cpp
@@ -124,34 +124,29 @@ START_TEST(test_states_slave)
         // 0  1  2  3  4  5  6  7  8  9  10 11  To / From
         {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // 0  EXECUTING
         {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // 1  MUST_ABORT
-        {  0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 }, // 2  ABORTING
-        {  0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0 }, // 3  REPLICATING
-        {  0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0 }, // 4  CERTIFYING
+        {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // 2  ABORTING
+        {  0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 }, // 3  REPLICATING
+        {  0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0 }, // 4  CERTIFYING
         {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // 5  MUST_REPLAY
         {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // 6  REPLAYING
         {  0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 }, // 7  APPLYING
-        {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1 }, // 8  COMMITTNG
-        {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, // 9  ROLLING_BACK
+        {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 }, // 8  COMMITTNG
+        {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // 9  ROLLING_BACK
         {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // 10 COMMITTED
         {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }  // 11 ROLLED_BACK
     };
 
     TrxHandleSlavePtr ts(TrxHandleSlave::New(false, sp),
                          TrxHandleSlaveDeleter());
-    fail_unless(ts->state() == TrxHandle::S_REPLICATING);
+    ck_assert(ts->state() == TrxHandle::S_REPLICATING);
 
-    // Visits only REPLICATING, CERTIFYING, APPLYING, COMMITTING, COMMITTED,
-    // ROLLED_BACK
     std::vector<int> visits(TrxHandle::num_states_);
     std::fill(visits.begin(), visits.end(), 0);
-    visits[TrxHandle::S_ABORTING] = 1;
     visits[TrxHandle::S_REPLICATING] = 1;
     visits[TrxHandle::S_CERTIFYING] = 1;
     visits[TrxHandle::S_APPLYING] = 1;
     visits[TrxHandle::S_COMMITTING] = 1;
     visits[TrxHandle::S_COMMITTED] = 1;
-    visits[TrxHandle::S_ROLLING_BACK] = 1;
-    visits[TrxHandle::S_ROLLED_BACK] = 1;
 
     check_states_graph(state_trans_slave, ts.get(), visits);
 }
@@ -174,15 +169,15 @@ START_TEST(test_serialization)
 
         std::vector<gu::byte_t> buf;
         trx->serialize(0, buf);
-        fail_unless(buf.size() > 0);
+        ck_assert(buf.size() > 0);
 
         TrxHandleSlavePtr txs1(TrxHandleSlave::New(false, sp),
                                TrxHandleSlaveDeleter());
         gcs_action const act =
             { 1, 2, buf.data(), int(buf.size()), GCS_ACT_WRITESET};
-        fail_unless(txs1->unserialize<true>(act) > 0);
-        fail_if(txs1->global_seqno() != act.seqno_g);
-        fail_if(txs1->local_seqno()  != act.seqno_l);
+        ck_assert(txs1->unserialize<true>(act) > 0);
+        ck_assert(txs1->global_seqno() == act.seqno_g);
+        ck_assert(txs1->local_seqno()  == act.seqno_l);
     }
 }
 END_TEST
@@ -198,11 +193,11 @@ apply_cb(
     )
 {
     std::vector<char>* const res(static_cast<std::vector<char>* >(ctx));
-    fail_if(NULL == res);
+    ck_assert(NULL != res);
 
     const char* const c(static_cast<const char*>(data->ptr));
-    fail_if(NULL == c);
-    fail_if(1 != data->len);
+    ck_assert(NULL != c);
+    ck_assert(1 == data->len);
 
     res->push_back(*c);
 
@@ -228,9 +223,9 @@ START_TEST(test_streaming)
     src[0] = 'a'; src[1] = 'b'; src[2] = 'c';
 
     std::vector<char> res;          // apply_cb should reproduce src in res
-    fail_if(src == res);
+    ck_assert(src != res);
 
-    fail_unless(trx->flags() & TrxHandle::F_BEGIN);
+    ck_assert(trx->flags() & TrxHandle::F_BEGIN);
 
     {
         // 0. first fragment A
@@ -240,16 +235,16 @@ START_TEST(test_streaming)
         std::vector<gu::byte_t> buf;
         trx->serialize(0, buf);
 
-        fail_unless(buf.size() > 0);
+        ck_assert(buf.size() > 0);
         trx->release_write_set_out();
 
         TrxHandleSlavePtr ts(TrxHandleSlave::New(false, sp),
                              TrxHandleSlaveDeleter());
         gcs_action const act =
             { 1, 2, buf.data(), int(buf.size()), GCS_ACT_WRITESET};
-        fail_unless(ts->unserialize<true>(act) > 0);
-        fail_unless(ts->flags() & TrxHandle::F_BEGIN);
-        fail_if(ts->flags() & TrxHandle::F_COMMIT);
+        ck_assert(ts->unserialize<true>(act) > 0);
+        ck_assert(ts->flags() & TrxHandle::F_BEGIN);
+        ck_assert(!(ts->flags() & TrxHandle::F_COMMIT));
         trx->add_replicated(ts);
 
         wsrep_bool_t exit_loop;
@@ -263,16 +258,16 @@ START_TEST(test_streaming)
 
         std::vector<gu::byte_t> buf;
         trx->serialize(0, buf);
-        fail_unless(buf.size() > 0);
+        ck_assert(buf.size() > 0);
         trx->release_write_set_out();
 
         TrxHandleSlavePtr ts(TrxHandleSlave::New(false, sp),
                              TrxHandleSlaveDeleter());
         gcs_action const act =
             { 2, 3, buf.data(), int(buf.size()), GCS_ACT_WRITESET};
-        fail_unless(ts->unserialize<true>(act) > 0);
-        fail_if(ts->flags() & TrxHandle::F_BEGIN);
-        fail_if(ts->flags() & TrxHandle::F_COMMIT);
+        ck_assert(ts->unserialize<true>(act) > 0);
+        ck_assert(!(ts->flags() & TrxHandle::F_BEGIN));
+        ck_assert(!(ts->flags() & TrxHandle::F_COMMIT));
         trx->add_replicated(ts);
 
         wsrep_bool_t exit_loop;
@@ -287,23 +282,23 @@ START_TEST(test_streaming)
 
         std::vector<gu::byte_t> buf;
         trx->serialize(0, buf);
-        fail_unless(buf.size() > 0);
+        ck_assert(buf.size() > 0);
         trx->release_write_set_out();
 
         TrxHandleSlavePtr ts(TrxHandleSlave::New(false, sp),
                              TrxHandleSlaveDeleter());
         gcs_action const act =
             { 3, 4, buf.data(), int(buf.size()), GCS_ACT_WRITESET};
-        fail_unless(ts->unserialize<true>(act) > 0);
-        fail_if(ts->flags() & TrxHandle::F_BEGIN);
-        fail_unless(ts->flags() & TrxHandle::F_COMMIT);
+        ck_assert(ts->unserialize<true>(act) > 0);
+        ck_assert(!(ts->flags() & TrxHandle::F_BEGIN));
+        ck_assert(ts->flags() & TrxHandle::F_COMMIT);
         trx->add_replicated(ts);
 
         wsrep_bool_t exit_loop;
         ts->apply(&res, apply_cb, wsrep_trx_meta_t(), exit_loop);
     }
 
-    fail_if(res != src);
+    ck_assert(res == src);
 }
 END_TEST
 

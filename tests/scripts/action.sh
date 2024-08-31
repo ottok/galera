@@ -1,11 +1,23 @@
 # Helper to get status variable value
 
+mysql_command()
+{
+    local node=$1
+    if [ "${NODE_LOCATION[$node]}" = "local" ]
+    then
+        echo "${NODE_TEST_DIR[$node]}/mysql/bin/mysql"
+    else
+        echo "mysql"
+    fi
+}
+
 cluster_status()
 {
     local node=$1
     case "$DBMS" in
         "MYSQL")
-            local res=$(mysql -u$DBMS_ROOT_USER -p$DBMS_ROOT_PSWD \
+            local command=$(mysql_command $node)
+            local res=$($command -u$DBMS_ROOT_USER -p$DBMS_ROOT_PSWD \
                 -h${NODE_INCOMING_HOST[$node]} -P${NODE_INCOMING_PORT[$node]} \
                 --skip-column-names -ss \
                 -e "SET wsrep_on=0;
@@ -22,9 +34,11 @@ mysql_query()
 {
     local node=$1
     local query=$2
-    mysql -u$DBMS_ROOT_USER -p$DBMS_ROOT_PSWD \
+    local command=$(mysql_command $node)
+
+    $command -u$DBMS_ROOT_USER -p$DBMS_ROOT_PSWD \
           -h${NODE_INCOMING_HOST[$node]} -P${NODE_INCOMING_PORT[$node]} \
-          --skip-column-names -ss -e "$query" 2>/dev/null
+          --skip-column-names -ss -e "$query"
 }
 
 wait_node_state()
@@ -172,7 +186,7 @@ wait_sync()
     local node
     for node in $nodes
     do
-        mysql_query "$node" "set wsrep_causal_reads=1; select 0;" 1>/dev/null
+        mysql_query "$node" "SET SESSION wsrep_sync_wait=1; select 0;" 1>/dev/null
     done
 }
 
@@ -318,7 +332,11 @@ start()
 
 _get_status_var()
 {
-    mysql_query "$1" "SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME = '$2'" 2>/dev/null || echo -1
+# INFORMATION_SCHEMA.GLOBAL_STATUS is deprecated in MySQL >= 5.7
+# SHOW GLOBAL STATUS seems to be more compatible between the versions.
+#    mysql_query "$1" "SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME = '$2'" 2>/dev/null || echo -1
+    mysql_query "$1" "SHOW GLOBAL STATUS LIKE '$2'" | tail -n1 | cut -f 2-
+    [ 0 = ${PIPESTATUS[0]} ] || echo -1
 }
 
 stop()

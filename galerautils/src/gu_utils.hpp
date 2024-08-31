@@ -66,7 +66,11 @@ from_string(const std::string& s,
 
     try
     {
-        if ((iss >> f >> ret).fail()) throw NotFound();
+        iss >> f >> ret;
+        if (iss.fail() || not iss.eof())
+        {
+            throw NotFound();
+        }
     }
     catch (gu::Exception& e)
     {
@@ -93,7 +97,11 @@ from_string<void*>(const std::string& s,
     std::istringstream iss(s);
     void*              ret;
 
-    if ((iss >> std::hex >> ret).fail()) throw NotFound();
+    iss >> std::hex >> ret;
+    if (iss.fail() || not iss.eof())
+    {
+        throw NotFound();
+    }
 
     return ret;
 }
@@ -157,14 +165,6 @@ public:
     template <class T> void operator()(T* t) { delete t; }
 };
 
-/*! swap method for arrays, which does't seem to be built in all compilers */
-template <typename T, size_t N>
-inline void
-swap_array(T (&a)[N], T (&b)[N])
-{
-    for (size_t n(0); n < N; ++n) std::swap(a[n], b[n]);
-}
-
 typedef std::ios_base& (*base_t) (std::ios_base& str);
 
 template <base_t base = std::hex,
@@ -204,13 +204,14 @@ std::ostream& operator << (std::ostream& os, const PrintBase<base, T>& b)
 /*! template to do arithmetics on void and byte pointers, compiler will
  *  catch anything else.
  * @return input type */
-template <typename T>
+template <typename T, typename PtrOffsetType>
 inline T*
-ptr_offset(T* ptr, ptrdiff_t i) { return static_cast<byte_t*>(ptr) + i; }
+ptr_offset(T* ptr, PtrOffsetType i) { return static_cast<byte_t*>(ptr) + i; }
 
-template <typename T>
+template <typename T, typename PtrOffsetType>
 inline const T*
-ptr_offset(const T* ptr, ptrdiff_t i) { return static_cast<const byte_t*>(ptr)+i; }
+ptr_offset(const T* ptr, PtrOffsetType i)
+    { return static_cast<const byte_t*>(ptr)+i; }
 
 } // namespace gu
 

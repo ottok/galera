@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2011-2019 Codership Oy <info@codership.com>
+// Copyright (C) 2011-2021 Codership Oy <info@codership.com>
 //
 
 
@@ -8,12 +8,142 @@
 #include "trx_handle.hpp"
 #include "monitor.hpp"
 #include "replicator_smm.hpp"
+#include "common.h"
 
 #include <GCache.hpp>
 #include <gu_arch.h>
 #include <check.h>
 
 using namespace galera;
+
+static void register_params(gu::Config& conf)
+{
+    galera::ist::register_params(conf);
+    galera::ReplicatorSMM::register_params(conf);
+    conf.add(COMMON_BASE_HOST_KEY);
+    conf.add(COMMON_BASE_PORT_KEY);
+#ifdef GALERA_HAVE_SSL
+    gu::ssl_register_params(conf);
+#endif // GALERA_HAVE_SSL
+}
+
+static void test_ist_recv_addr_expect(const std::string& expect,
+                                      const std::string& addr)
+{
+    ck_assert_msg(expect == addr, "Expected %s got %s",
+                  expect.c_str(), addr.c_str());
+}
+
+START_TEST(test_ist_recv_addr_not_set)
+{
+    gu::Config conf;
+    register_params(conf);
+    try
+    {
+        galera::IST_determine_recv_addr(conf);
+        ck_abort_msg("Exception not thrown");
+    }
+    catch (const gu::Exception& e)
+    {
+        ck_assert(e.get_errno() == EINVAL);
+    }
+}
+END_TEST
+
+START_TEST(test_ist_recv_addr_base_host)
+{
+    gu::Config conf;
+    register_params(conf);
+    conf.set(COMMON_BASE_HOST_KEY, "127.0.0.1");
+    test_ist_recv_addr_expect("tcp://127.0.0.1:4568",
+                              galera::IST_determine_recv_addr(conf));
+}
+END_TEST
+
+START_TEST(test_ist_recv_addr_ip)
+{
+    gu::Config conf;
+    register_params(conf);
+    conf.set(galera::ist::Receiver::RECV_ADDR, "127.0.0.1");
+    test_ist_recv_addr_expect("tcp://127.0.0.1:4568",
+                              galera::IST_determine_recv_addr(conf));
+}
+END_TEST
+
+START_TEST(test_ist_recv_addr_ip_port)
+{
+    gu::Config conf;
+    register_params(conf);
+    conf.set(galera::ist::Receiver::RECV_ADDR, "127.0.0.1:10001");
+
+    test_ist_recv_addr_expect("tcp://127.0.0.1:10001",
+                              galera::IST_determine_recv_addr(conf));
+}
+END_TEST
+
+START_TEST(test_ist_recv_addr_tcp_ip)
+{
+    gu::Config conf;
+    register_params(conf);
+    conf.set(galera::ist::Receiver::RECV_ADDR, "tcp://127.0.0.1");
+    test_ist_recv_addr_expect("tcp://127.0.0.1:4568",
+                              galera::IST_determine_recv_addr(conf));
+}
+END_TEST
+
+START_TEST(test_ist_recv_addr_tcp_ip_port)
+{
+    gu::Config conf;
+    register_params(conf);
+    conf.set(galera::ist::Receiver::RECV_ADDR, "tcp://127.0.0.1");
+    test_ist_recv_addr_expect("tcp://127.0.0.1:4568",
+                              galera::IST_determine_recv_addr(conf));
+}
+END_TEST
+
+START_TEST(test_ist_recv_bind_not_set)
+{
+    gu::Config conf;
+    register_params(conf);
+    conf.set(galera::ist::Receiver::RECV_ADDR, "127.0.0.1");
+    try
+    {
+        (void)galera::IST_determine_recv_bind(conf);
+        ck_abort_msg("Exception not thrown");
+    }
+    catch (const gu::NotSet&) { }
+}
+END_TEST
+
+#ifdef GALERA_HAVE_SSL
+
+START_TEST(test_ist_recv_addr_auto_ssl_scheme)
+{
+    gu::Config conf;
+    register_params(conf);
+    // Existing ssl_key parameter should result in ssl scheme if
+    // scheme is not explicitly given.
+    conf.set(gu::conf::ssl_key, "key");
+    conf.set(galera::ist::Receiver::RECV_ADDR, "127.0.0.1");
+    test_ist_recv_addr_expect("ssl://127.0.0.1:4568",
+                              galera::IST_determine_recv_addr(conf));
+}
+END_TEST
+
+START_TEST(test_ist_recv_addr_ssl_scheme)
+{
+    gu::Config conf;
+    register_params(conf);
+    // Existing ssl_key parameter should result in ssl scheme if
+    // scheme is not explicitly given.
+    conf.set(gu::conf::ssl_key, "key");
+    conf.set(galera::ist::Receiver::RECV_ADDR, "ssl://127.0.0.1");
+    test_ist_recv_addr_expect("ssl://127.0.0.1:4568",
+                              galera::IST_determine_recv_addr(conf));
+}
+END_TEST
+
+#endif // GALERA_HAVE_SSL
 
 // Message tests
 
@@ -26,11 +156,11 @@ START_TEST(test_ist_message)
     Message m3(3, Message::T_HANDSHAKE, 0x2, 3, 1001);
 
 #if GU_WORDSIZE == 32
-    fail_unless(serial_size(m3) == 20, "serial size %zu != 20",
-                serial_size(m3));
+    ck_assert_msg(serial_size(m3) == 20, "serial size %zu != 20",
+                  serial_size(m3));
 #elif GU_WORDSIZE == 64
-    fail_unless(serial_size(m3) == 24, "serial size %zu != 24",
-                serial_size(m3));
+    ck_assert_msg(serial_size(m3) == 24, "serial size %zu != 24",
+                  serial_size(m3));
 #endif
 
     gu::Buffer buf(m3.serial_size());
@@ -38,44 +168,46 @@ START_TEST(test_ist_message)
     Message mu3(3);
     mu3.unserialize(&buf[0], buf.size(), 0);
 
-    fail_unless(mu3.version() == 3);
-    fail_unless(mu3.type()    == Message::T_HANDSHAKE);
-    fail_unless(mu3.flags()   == 0x2);
-    fail_unless(mu3.ctrl()    == 3);
-    fail_unless(mu3.len()     == 1001);
+    ck_assert(mu3.version() == 3);
+    ck_assert(mu3.type()    == Message::T_HANDSHAKE);
+    ck_assert(mu3.flags()   == 0x2);
+    ck_assert(mu3.ctrl()    == 3);
+    ck_assert(mu3.len()     == 1001);
 #endif /* 0 */
 
     Message const m2(VER21, Message::T_HANDSHAKE, 0x2, 3, 1001);
     size_t const s2(12);
-    fail_unless(m2.serial_size() == s2,
-                "Expected m2.serial_size() = %zd, got %zd", s2,m2.serial_size());
+    ck_assert_msg(m2.serial_size() == s2,
+                  "Expected m2.serial_size() = %zd, got %zd",
+                  s2, m2.serial_size());
 
     gu::Buffer buf2(m2.serial_size());
     m2.serialize(&buf2[0], buf2.size(), 0);
 
     Message mu2(VER21);
     mu2.unserialize(&buf2[0], buf2.size(), 0);
-    fail_unless(mu2.version() == VER21);
-    fail_unless(mu2.type()    == Message::T_HANDSHAKE);
-    fail_unless(mu2.flags()   == 0x2);
-    fail_unless(mu2.ctrl()    == 3);
-    fail_unless(mu2.len()     == 1001);
+    ck_assert(mu2.version() == VER21);
+    ck_assert(mu2.type()    == Message::T_HANDSHAKE);
+    ck_assert(mu2.flags()   == 0x2);
+    ck_assert(mu2.ctrl()    == 3);
+    ck_assert(mu2.len()     == 1001);
 
     Message const m4(VER40, Message::T_HANDSHAKE, 0x2, 3, 1001);
     size_t const s4(16 + sizeof(uint64_t /* Message::checksum_t */));
-    fail_unless(m4.serial_size() == s4,
-                "Expected m3.serial_size() = %zd, got %zd", s4,m4.serial_size());
+    ck_assert_msg(m4.serial_size() == s4,
+                  "Expected m3.serial_size() = %zd, got %zd",
+                  s4, m4.serial_size());
 
     gu::Buffer buf4(m4.serial_size());
     m4.serialize(&buf4[0], buf4.size(), 0);
 
     Message mu4(VER40);
     mu4.unserialize(&buf4[0], buf4.size(), 0);
-    fail_unless(mu4.version() == VER40);
-    fail_unless(mu4.type()    == Message::T_HANDSHAKE);
-    fail_unless(mu4.flags()   == 0x2);
-    fail_unless(mu4.ctrl()    == 3);
-    fail_unless(mu4.len()     == 1001);
+    ck_assert(mu4.version() == VER40);
+    ck_assert(mu4.type()    == Message::T_HANDSHAKE);
+    ck_assert(mu4.flags()   == 0x2);
+    ck_assert(mu4.ctrl()    == 3);
+    ck_assert(mu4.len()     == 1001);
 }
 END_TEST
 
@@ -156,6 +288,7 @@ extern "C" void* sender_thd(void* arg)
     gu::Config conf;
     galera::ReplicatorSMM::InitConfig(conf, NULL, NULL);
     gu_barrier_wait(&start_barrier);
+    sargs->gcache_.seqno_lock(sargs->first_); // unlocked in sender dtor
     galera::ist::Sender sender(conf, sargs->gcache_, sargs->peer_,
                                sargs->version_);
     mark_point();
@@ -180,7 +313,8 @@ namespace
 
         ~ISTHandler() {}
 
-        void ist_trx(const TrxHandleSlavePtr& ts, bool must_apply, bool preload)
+        void ist_trx(const TrxHandleSlavePtr& ts, bool must_apply,
+                     bool preload) override
         {
             assert(ts != 0);
             ts->verify_checksum();
@@ -206,7 +340,8 @@ namespace
             seqno_ = ts->global_seqno();
         }
 
-        void ist_cc(const gcs_action& act, bool must_apply, bool preload)
+        void ist_cc(const gcs_action& act, bool must_apply,
+                    bool preload) override
         {
             gcs_act_cchange const cc(act.buf, act.size);
             assert(act.seqno_g == cc.seqno);
@@ -222,11 +357,11 @@ namespace
             }
         }
 
-        void ist_end(int error)
+        void ist_end(const ist::Result& result) override
         {
-            log_info << "IST ended with status: " << error;
+            log_info << "IST ended with status: " << result.error_str;
             gu::Lock lock(mutex_);
-            error_ = error;
+            error_ = result.error;
             eof_ = true;
             cond_.signal();
         }
@@ -266,7 +401,7 @@ extern "C" void* receiver_thd(void* arg)
     conf.set(galera::ist::Receiver::RECV_ADDR, rargs->listen_addr_);
     ISTHandler isth;
     galera::ist::Receiver receiver(conf, rargs->gcache_, slave_pool,
-                                   isth, 0);
+                                   isth, 0, NULL);
 
     // Prepare starts IST receiver thread
     rargs->listen_addr_ = receiver.prepare(rargs->first_, rargs->last_,
@@ -306,7 +441,8 @@ static int select_trx_version(int protocol_version)
     case 10:
         return 5;
     default:
-        fail("unsupported replicator protocol version: %n", protocol_version);
+        ck_abort_msg("unsupported replicator protocol version: %d",
+                     protocol_version);
     }
 
     return -1;
@@ -339,7 +475,8 @@ static void store_trx(gcache::GCache* const gcache,
 
     if (trx_params.version_ < 3)
     {
-        fail("WS version %d not supported any more", trx_params.version_);
+        ck_abort_msg("WS version %d not supported any more",
+                     trx_params.version_);
     }
     else
     {
@@ -388,9 +525,9 @@ static void store_cc(gcache::GCache* const gcache,
     int   const cc_size(cc.write(&tmp));
     void* const cc_ptr(gcache->malloc(cc_size));
 
-    fail_if(NULL == cc_ptr);
+    ck_assert(NULL != cc_ptr);
     memcpy(cc_ptr, tmp, cc_size);
-
+    free(tmp);
     gcache->seqno_assign(cc_ptr, i, GCS_ACT_CCHANGE, i > 0);
 }
 
@@ -414,14 +551,15 @@ static void test_ist_common(int const version)
     std::string const gcache_sender_file("ist_sender.cache");
     conf_sender.set("gcache.name", gcache_sender_file);
     conf_sender.set("gcache.size", "1M");
-    gcache::GCache* gcache_sender = new gcache::GCache(conf_sender, dir);
+    gcache::GCache* gcache_sender = new gcache::GCache(NULL, conf_sender, dir);
 
     gu::Config conf_receiver;
     galera::ReplicatorSMM::InitConfig(conf_receiver, NULL, NULL);
     std::string const gcache_receiver_file("ist_receiver.cache");
     conf_receiver.set("gcache.name", gcache_receiver_file);
     conf_receiver.set("gcache.size", "1M");
-    gcache::GCache* gcache_receiver = new gcache::GCache(conf_receiver, dir);
+    gcache::GCache* gcache_receiver = new gcache::GCache(NULL, conf_receiver,
+                                                         dir);
 
     std::string receiver_addr("tcp://127.0.0.1:0");
     wsrep_uuid_t uuid;
@@ -499,18 +637,60 @@ Suite* ist_suite()
     Suite* s  = suite_create("ist");
     TCase* tc;
 
+    tc = tcase_create("test_ist_recv_addr_not_set");
+    tcase_add_test(tc, test_ist_recv_addr_not_set);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_ist_recv_addr_ip");
+    tcase_add_test(tc, test_ist_recv_addr_ip);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_ist_recv_addr_base_host");
+    tcase_add_test(tc, test_ist_recv_addr_base_host);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_ist_recv_addr_ip_port");
+    tcase_add_test(tc, test_ist_recv_addr_ip_port);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_ist_recv_addr_tcp_ip");
+    tcase_add_test(tc, test_ist_recv_addr_tcp_ip);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_ist_recv_addr_tcp_ip_port");
+    tcase_add_test(tc, test_ist_recv_addr_tcp_ip_port);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_ist_recv_bind_not_set");
+    tcase_add_test(tc, test_ist_recv_bind_not_set);
+    suite_add_tcase(s, tc);
+
+#ifdef GALERA_HAVE_SSL
+    tc = tcase_create("test_ist_recv_addr_auto_ssl_scheme");
+    tcase_add_test(tc, test_ist_recv_addr_auto_ssl_scheme);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_ist_recv_addr_ssl_scheme");
+    tcase_add_test(tc, test_ist_recv_addr_ssl_scheme);
+    suite_add_tcase(s, tc);
+
+#endif // GALERA_HAVE_SSL
+
     tc = tcase_create("test_ist_message");
     tcase_add_test(tc, test_ist_message);
     suite_add_tcase(s, tc);
     tc = tcase_create("test_ist_v7");
     tcase_set_timeout(tc, 60);
+    suite_add_tcase(s, tc);
     tcase_add_test(tc, test_ist_v7);
     tc = tcase_create("test_ist_v8");
     tcase_set_timeout(tc, 60);
     tcase_add_test(tc, test_ist_v8);
+    suite_add_tcase(s, tc);
     tc = tcase_create("test_ist_v9");
     tcase_set_timeout(tc, 60);
     tcase_add_test(tc, test_ist_v9);
+    suite_add_tcase(s, tc);
     tc = tcase_create("test_ist_v10");
     tcase_set_timeout(tc, 60);
     tcase_add_test(tc, test_ist_v10);

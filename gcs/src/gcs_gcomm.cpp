@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2016 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2019 Codership Oy <info@codership.com>
  */
 
 /*!
@@ -21,28 +21,18 @@
 #include <gcomm/util.hpp>
 #include <gcomm/conf.hpp>
 
-#ifdef PROFILE_GCS_GCOMM
-#define GCOMM_PROFILE 1
-#else
-#undef GCOMM_PROFILE
-#endif // PROFILE_GCS_GCOMM
-#include <profile.hpp>
-
 #include <gu_backtrace.hpp>
 #include <gu_throw.hpp>
 #include <gu_logger.hpp>
-#include <gu_prodcons.hpp>
-#include <gu_barrier.hpp>
 #include <gu_thread.hpp>
 
 #include <deque>
+#include <future>
 
 using namespace std;
 using namespace gu;
-using namespace gu::prodcons;
 using namespace gu::datetime;
 using namespace gcomm;
-using namespace prof;
 
 static const std::string gcomm_thread_schedparam_opt("gcomm.thread_prio");
 
@@ -148,31 +138,7 @@ private:
     bool waiting_;
 };
 
-
-class MsgData : public MessageData
-{
-public:
-    MsgData(const byte_t* data,
-            const size_t data_size,
-            const gcs_msg_type_t msg_type) :
-        data_     (data),
-        data_size_(data_size),
-        msg_type_ (msg_type)
-    { }
-    const byte_t* get_data() const { return data_; }
-    size_t get_data_size() const { return data_size_; }
-    gcs_msg_type_t get_msg_type() const { return msg_type_; }
-
-public:
-    MsgData(const MsgData&);
-    void operator=(const MsgData&);
-    const byte_t*  data_;
-    size_t         data_size_;
-    gcs_msg_type_t msg_type_;
-};
-
-
-class GCommConn : public Consumer, public Toplay
+class GCommConn : public Toplay
 {
 public:
 
@@ -182,7 +148,6 @@ public:
         uuid_(),
         thd_(),
         schedparam_(conf_.get(gcomm_thread_schedparam_opt)),
-        barrier_(2),
         uri_(u),
         net_(Protonet::create(conf_)),
         tp_(0),
@@ -192,98 +157,22 @@ public:
         error_(0),
         recv_buf_(),
         current_view_(),
-        prof_("gcs_gcomm")
+        connect_task_()
     {
         log_info << "backend: " << net_->type();
     }
 
     ~GCommConn()
     {
+        delete tp_;
         delete net_;
     }
 
     const gcomm::UUID& get_uuid() const { return uuid_; }
 
-    static void* run_fn(void* arg)
-    {
-        static_cast<GCommConn*>(arg)->run();
-        return 0;
-    }
-
     void connect(bool) { }
 
-
-    void connect(const string& channel, bool const bootstrap)
-    {
-        if (tp_ != 0)
-        {
-            gu_throw_fatal << "backend connection already open";
-        }
-
-
-        error_ = ENOTCONN;
-        int err;
-        if ((err = gu_thread_create(&thd_, 0, &run_fn, this)) != 0)
-        {
-            gu_throw_error(err) << "Failed to create thread";
-        }
-
-        // Helper to call barrier_.wait() when goes out of scope
-        class StartBarrier
-        {
-        public:
-            StartBarrier(Barrier& barrier) : barrier_(barrier) { }
-            ~StartBarrier()
-            {
-                barrier_.wait();
-            }
-        private:
-            Barrier& barrier_;
-        } start_barrier(barrier_);
-
-        thread_set_schedparam(thd_, schedparam_);
-        log_info << "gcomm thread scheduling priority set to "
-                 << thread_get_schedparam(thd_) << " ";
-
-        uri_.set_option("gmcast.group", channel);
-        tp_ = Transport::create(*net_, uri_);
-        gcomm::connect(tp_, this);
-
-        if (bootstrap)
-        {
-            log_info << "gcomm: bootstrapping new group '" << channel << '\'';
-        }
-        else
-        {
-            string peer;
-            URI::AuthorityList::const_iterator i, i_next;
-            for (i = uri_.get_authority_list().begin();
-                 i != uri_.get_authority_list().end(); ++i)
-            {
-                i_next = i;
-                ++i_next;
-                string host;
-                string port;
-                try { host = i->host(); } catch (NotSet&) { }
-                try { port = i->port(); } catch (NotSet&) { }
-                peer += host != "" ? host + ":" + port : "";
-                if (i_next != uri_.get_authority_list().end())
-                {
-                    peer += ",";
-                }
-            }
-            log_info << "gcomm: connecting to group '" << channel
-                     << "', peer '" << peer << "'";
-        }
-
-        tp_->connect(bootstrap);
-
-        uuid_ = tp_->uuid();
-
-        error_ = 0;
-
-        log_info << "gcomm: connected";
-    }
+    void connect(string channel, bool const bootstrap);
 
     void close(bool force = false)
     {
@@ -307,14 +196,7 @@ public:
             delete tp_;
             tp_ = 0;
         }
-        const Message* msg;
-
-        while ((msg = get_next_msg()) != 0)
-        {
-            return_ack(Message(&msg->get_producer(), 0, -ECONNABORTED));
-        }
         log_info << "gcomm: closed";
-        log_debug << prof_;
     }
 
     void run();
@@ -331,8 +213,6 @@ public:
     void handle_up     (const void*        id,
                         const Datagram&    dg,
                         const ProtoUpMeta& um);
-
-    void queue_and_wait(const Message& msg, Message* ack);
 
     RecvBuf&    get_recv_buf()            { return recv_buf_; }
     size_t      get_mtu()           const
@@ -403,11 +283,12 @@ private:
 
     void unref() { }
 
+    void print_connect_diag(const std::string&, bool boostrap) const;
+
     gu::Config&       conf_;
     gcomm::UUID       uuid_;
     gu_thread_t       thd_;
     ThreadSchedparam  schedparam_;
-    Barrier           barrier_;
     URI               uri_;
     Protonet*         net_;
     Transport*        tp_;
@@ -417,9 +298,88 @@ private:
     int               error_;
     RecvBuf           recv_buf_;
     View              current_view_;
-    Profile           prof_;
+    std::packaged_task<void()> connect_task_;
 };
 
+extern "C"
+void* run_fn(void* arg)
+{
+    static_cast<GCommConn*>(arg)->run();
+    gu_thread_exit(0);
+}
+
+void GCommConn::print_connect_diag(const std::string& channel,
+                                   bool const bootstrap) const
+{
+    if (bootstrap)
+    {
+        log_info << "gcomm: bootstrapping new group '" << channel << '\'';
+    }
+    else
+    {
+        string peer;
+        URI::AuthorityList::const_iterator i, i_next;
+        for (i = uri_.get_authority_list().begin();
+             i != uri_.get_authority_list().end(); ++i)
+        {
+            i_next = i;
+            ++i_next;
+            string host;
+            string port;
+            try { host = i->host(); } catch (NotSet&) { }
+            try { port = i->port(); } catch (NotSet&) { }
+            peer += host != "" ? host + ":" + port : "";
+            if (i_next != uri_.get_authority_list().end())
+            {
+                peer += ",";
+            }
+        }
+        log_info << "gcomm: connecting to group '" << channel
+                 << "', peer '" << peer << "'";
+    }
+}
+
+void GCommConn::connect(string channel, bool const bootstrap)
+{
+    if (tp_ != 0)
+    {
+        gu_throw_fatal << "backend connection already open";
+    }
+
+    /* This task is invoked at the very beginning of
+     * run() method. */
+    connect_task_ = std::packaged_task<void()>{
+        [this, channel, bootstrap]()
+        {
+            gcomm::Critical<Protonet> crit(*net_);
+            uri_.set_option("gmcast.group", channel);
+            tp_ = Transport::create(*net_, uri_);
+            gcomm::connect(tp_, this);
+            print_connect_diag(channel, bootstrap);
+            tp_->connect(bootstrap);
+            uuid_ = tp_->uuid();
+            error_ = 0;
+            log_info << "gcomm: connected";
+        }
+    };
+
+    auto future = connect_task_.get_future();
+
+    error_ = ENOTCONN;
+    int err;
+    if ((err = gu_thread_create(
+             &thd_, 0, run_fn, this)) != 0)
+    {
+        gu_throw_system_error(err) << "Failed to create thread";
+    }
+
+    thread_set_schedparam(thd_, schedparam_);
+    log_info << "gcomm thread scheduling priority set to "
+             << thread_get_schedparam(thd_) << " ";
+
+    /* Will throw if an exception was thrown in connect_task. */
+    future.get();
+}
 
 void
 GCommConn::handle_up(const void* id, const Datagram& dg, const ProtoUpMeta& um)
@@ -448,9 +408,7 @@ GCommConn::handle_up(const void* id, const Datagram& dg, const ProtoUpMeta& um)
         {
             if (NodeList::key(i) == um.source())
             {
-                profile_enter(prof_);
                 recv_buf_.push_back(RecvBufData(idx, dg, um));
-                profile_leave(prof_);
                 break;
             }
             ++idx;
@@ -459,28 +417,10 @@ GCommConn::handle_up(const void* id, const Datagram& dg, const ProtoUpMeta& um)
     }
 }
 
-
-void GCommConn::queue_and_wait(const Message& msg, Message* ack)
-{
-    {
-        Lock lock(mutex_);
-        if (terminated_ == true)
-        {
-            *ack = Message(&msg.get_producer(), 0, -ECONNABORTED);
-            return;
-        }
-    }
-    profile_enter(prof_);
-    Consumer::queue_and_wait(msg, ack);
-    profile_leave(prof_);
-}
-
-
-
 void GCommConn::run()
 {
-    barrier_.wait();
-    if (error_ != 0) gu_thread_exit(0);
+    connect_task_();
+    if (error_ != 0) return;
 
     while (true)
     {
@@ -645,7 +585,7 @@ static void fill_cmp_msg(const View& view, const gcomm::UUID& my_uuid,
                                      i->second.segment());
         if (ret < 0) {
             gu_throw_error(-ret) << "Failed to add member '" << uuid
-                                 << "' to component message.";
+                                 << "' to component message: " << -ret;
         }
 
         if (uuid == my_uuid)
@@ -770,7 +710,6 @@ static GCS_BACKEND_NAME_FN(gcomm_name)
     return name;
 }
 
-
 static GCS_BACKEND_OPEN_FN(gcomm_open)
 {
     GCommConn::Ref ref(backend);
@@ -784,7 +723,6 @@ static GCS_BACKEND_OPEN_FN(gcomm_open)
 
     try
     {
-        gcomm::Critical<Protonet> crit(conn.get_pnet());
         conn.connect(channel, bootstrap);
     }
     catch (Exception& e)
@@ -930,7 +868,7 @@ GCS_BACKEND_STATUS_GET_FN(gcomm_status_get)
     GCommConn::Ref ref(backend);
     if (ref.get() == 0)
     {
-        gu_throw_error(-EBADFD);
+        gu_throw_error(-EBADFD) << "Could not get status from gcomm backend";
     }
 
     GCommConn& conn(*ref.get());

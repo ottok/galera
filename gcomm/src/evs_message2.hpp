@@ -1,7 +1,5 @@
 /*
- * Copyright (C) 2009 Codership Oy <info@codership.com>
- *
- * $Id$
+ * Copyright (C) 2009-2023 Codership Oy <info@codership.com>
  */
 
 #ifndef EVS_MESSAGE2_HPP
@@ -142,6 +140,8 @@ public:
         EVS_T_LEAVE    = 6, /*!< Leave message          */
         EVS_T_DELAYED_LIST = 7 /*!< Evict list message */
     };
+
+    static const size_t num_message_types = EVS_T_DELAYED_LIST + 1;
 
     typedef std::map<UUID, uint8_t> DelayedList;
 
@@ -290,7 +290,17 @@ public:
      */
     gu::datetime::Date tstamp() const { return tstamp_; }
 
-    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset);
+    /* Read type from message buffer. */
+    static Type get_type(const gu::byte_t* buf, size_t buflen, size_t offset);
+
+    /* Unserialize common header. */
+    size_t unserialize_common(const gu::byte_t* buf, size_t buflen,
+                              size_t offset);
+
+    /* Unserialize message. */
+    virtual size_t unserialize(const gu::byte_t* buf, size_t buflen,
+                               size_t offset)
+        = 0;
 
     bool operator==(const Message& cmp) const;
 
@@ -373,7 +383,7 @@ public:
         install_view_id_ (install_view_id),
         range_uuid_      (range_uuid),
         range_           (range),
-        tstamp_          (gu::datetime::Date::now()),
+        tstamp_          (gu::datetime::Date::monotonic()),
         node_list_       (node_list),
         delayed_list_    ()
     { }
@@ -444,8 +454,7 @@ public:
     void set_aru_seq(const seqno_t as) { aru_seq_ = as; }
 
     size_t serialize(gu::byte_t* buf, size_t buflen, size_t offset) const;
-    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset,
-                       bool skip_header = false);
+    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset) override;
     size_t serial_size() const;
 
 };
@@ -504,8 +513,8 @@ public:
                 fifo_seq)
     { }
     size_t serialize(gu::byte_t* buf, size_t buflen, size_t offset) const;
-    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset,
-                       bool skip_header = false);
+    size_t unserialize(const gu::byte_t* buf, size_t buflen,
+                       size_t offset) override;
     size_t serial_size() const;
 };
 
@@ -537,8 +546,8 @@ public:
                 range)
     { }
     size_t serialize(gu::byte_t* buf, size_t buflen, size_t offset) const;
-    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset,
-                       bool skip_header = false);
+    size_t unserialize(const gu::byte_t* buf, size_t buflen,
+                       size_t offset) override;
     size_t serial_size() const;
 };
 
@@ -569,8 +578,8 @@ public:
                 node_list)
     { }
     size_t serialize(gu::byte_t* buf, size_t buflen, size_t offset) const;
-    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset,
-                       bool skip_header = false);
+    size_t unserialize(const gu::byte_t* buf, size_t buflen,
+                       size_t offset) override;
     size_t serial_size() const;
 };
 
@@ -602,8 +611,8 @@ public:
                 node_list)
     { }
     size_t serialize(gu::byte_t* buf, size_t buflen, size_t offset) const;
-    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset,
-                       bool skip_header = false);
+    size_t unserialize(const gu::byte_t* buf, size_t buflen,
+                       size_t offset) override;
     size_t serial_size() const;
 };
 
@@ -631,8 +640,8 @@ public:
                 flags)
     { }
     size_t serialize(gu::byte_t* buf, size_t buflen, size_t offset) const;
-    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset,
-                       bool skip_header = false);
+    size_t unserialize(const gu::byte_t* buf, size_t buflen,
+                       size_t offset) override;
     size_t serial_size() const;
 };
 
@@ -662,8 +671,8 @@ public:
     const DelayedList& delayed_list() const { return delayed_list_; }
 
     size_t serialize(gu::byte_t* buf, size_t buflen, size_t offset) const;
-    size_t unserialize(const gu::byte_t* buf, size_t buflen, size_t offset,
-                       bool skip_header = false);
+    size_t unserialize(const gu::byte_t* buf, size_t buflen,
+                       size_t offset) override;
     size_t serial_size() const;
     bool operator==(const DelayedListMessage& cmp) const
     {

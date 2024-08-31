@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2010-2018 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2024 Codership Oy <info@codership.com>
 //
 
 
@@ -45,9 +45,7 @@ namespace galera
 
         void add(typename T::State from, typename T::State to)
         {
-            trans_map_.insert_unique(
-                std::make_pair(typename T::Transition(from, to),
-                               typename T::Fsm::TransAttr()));
+            trans_map_.insert_unique(typename T::Transition(from, to));
         }
     private:
         typename T::Fsm::TransMap& trans_map_;
@@ -205,7 +203,6 @@ namespace galera
 
         bool master() const { return master_; }
 
-        void print(std::ostream& os) const;
 
         virtual ~TrxHandle() {}
 
@@ -216,6 +213,8 @@ namespace galera
         }
 
     protected:
+
+        void print(std::ostream& os) const;
 
         void  set_state(State const state, int const line)
         {
@@ -359,7 +358,8 @@ namespace galera
     { return ws_flags_to_trx_flags_tmpl<FLAGS_MATCH_API_FLAGS>(flags); }
 
     std::ostream& operator<<(std::ostream& os, TrxHandle::State s);
-    std::ostream& operator<<(std::ostream& os, const TrxHandle& trx);
+    class TrxHandleMaster;
+    std::ostream& operator<<(std::ostream& os, const TrxHandleMaster& trx);
 
     class TrxHandleSlave;
     std::ostream& operator<<(std::ostream& os, const TrxHandleSlave& th);
@@ -432,6 +432,7 @@ namespace galera
                 case WriteSetNG::VER3:
                 case WriteSetNG::VER4:
                 case WriteSetNG::VER5:
+                case WriteSetNG::VER6:
                     write_set_.read_buf (act.buf, act.size);
                     assert(version_ == write_set_.version());
                     write_set_flags_ = fixup_write_set_flags(
@@ -637,26 +638,24 @@ namespace galera
         void set_ends_nbo(wsrep_seqno_t seqno) { ends_nbo_ = seqno; }
         wsrep_seqno_t ends_nbo() const { return ends_nbo_; }
 
-        void mark_dummy(int const line = -2)
+        void mark_dummy()
         {
-            set_depends_seqno(WSREP_SEQNO_UNDEFINED);
             set_flags(flags() | F_ROLLBACK);
-            switch(state())
-            {
-            case S_CERTIFYING:
-            case S_REPLICATING:
-                set_state(S_ABORTING, line);
-                break;
-            case S_ABORTING:
-            case S_ROLLING_BACK:
-            case S_ROLLED_BACK:
-                break;
-            default:
-                assert(0);
-            }
-            // must be set to S_ROLLED_BACK after commit_cb()
         }
-        bool is_dummy()   const { return (flags() &  F_ROLLBACK); }
+
+        // Mark action dummy and assign gcache buffer pointer. The
+        // action size is left zero.
+        void mark_dummy_with_action(const void* buf)
+        {
+            mark_dummy();
+            action_.first = buf;
+            action_.second = 0;
+        }
+        bool is_dummy() const
+        {
+            return (flags() &  F_ROLLBACK) &&
+                (flags() != EXPLICIT_ROLLBACK_FLAGS);
+        }
         bool skip_event() const { return (flags() == F_ROLLBACK); }
 
         bool is_streaming() const
@@ -860,14 +859,6 @@ namespace galera
 
         void append_key(const KeyData& key)
         {
-            // Current limitations with certification on trx versions 3 to 5
-            // impose the the following restrictions on keys
-
-            // The shared key behavior for TOI operations is completely
-            // untested, so don't allow it (and it probably does not even
-            // make any sense)
-            assert(is_toi() == false  || key.shared() == false);
-
             /*! protection against protocol change during trx lifetime */
             if (key.proto_ver != version())
             {
@@ -917,7 +908,7 @@ namespace galera
             return write_set_out().gather(source_id(),conn_id(),trx_id(),out);
         }
 
-        void finalize(wsrep_seqno_t const last_seen_seqno)
+        void finalize(wsrep_seqno_t last_seen_seqno)
         {
             assert(last_seen_seqno >= 0);
             assert(ts_ == 0 || last_seen_seqno >= ts_->last_seen_seqno());
@@ -929,9 +920,21 @@ namespace galera
             {
                 /* make sure this fragment depends on the previous */
                 wsrep_seqno_t prev_seqno(last_ts_seqno_);
+                if (prev_seqno == WSREP_SEQNO_UNDEFINED)
+                {
+                    assert((flags() & TrxHandle::F_COMMIT) ||
+                           (flags() & TrxHandle::F_ROLLBACK));
+                    prev_seqno = 0;
+                }
                 assert(version() >= WriteSetNG::VER5);
                 assert(prev_seqno >= 0);
-                assert(prev_seqno <= last_seen_seqno);
+                // Although commit happens in order, the release of apply
+                // monitor which is used to determine last committed may
+                // not happen in order. Therefore it is possible that the
+                // last seen given as an argument for this method lies
+                // below prev_seqno. Adjust last seen seqno to match
+                // at least prev_seqno which is now known to be committed.
+                last_seen_seqno = std::max(last_seen_seqno, prev_seqno);
                 pa_range = std::min(wsrep_seqno_t(pa_range),
                                     last_seen_seqno - prev_seqno);
             }
@@ -995,6 +998,8 @@ namespace galera
         void set_deferred_abort(bool deferred_abort)
         { deferred_abort_ = deferred_abort; }
         bool deferred_abort() const { return deferred_abort_; }
+
+        void print(std::ostream& os) const;
     private:
 
         inline int pa_range_default() const

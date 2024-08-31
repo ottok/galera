@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2014 Codership Oy <info@codership.com>
+ * Copyright (C) 2009-2020 Codership Oy <info@codership.com>
  */
 
 #include "check_gcomm.hpp"
@@ -20,28 +20,6 @@ using gu::Buffer;
 
 #include <check.h>
 
-//
-// run_all_tests is set tuo true by default. To disable gmcast tests
-// which use real TCP transport, set GALERA_TEST_DETERMINISTIC env
-// variable before running gmcast test suite.
-//
-static bool run_all_tests(true);
-
-static struct run_all_gmcast_tests
-{
-public:
-    run_all_gmcast_tests()
-    {
-        if (::getenv("GALERA_TEST_DETERMINISTIC"))
-        {
-            run_all_tests = false;
-        }
-        else
-        {
-            run_all_tests = true;
-        }
-    }
-} run_all_gmcast_tests;
 // Note: Multicast test(s) not run by default.
 static bool test_multicast(false);
 string mcast_param("gmcast.mcast_addr=239.192.0.11&gmcast.mcast_port=4567");
@@ -54,7 +32,7 @@ START_TEST(test_gmcast_multicast)
     gu::Config conf;
     gu::ssl_register_params(conf);
     gcomm::Conf::register_params(conf);
-    auto_ptr<Protonet> pnet(Protonet::create(conf));
+    unique_ptr<Protonet> pnet(Protonet::create(conf));
     Transport* gm1(Transport::create(*pnet, uri1));
 
     gm1->connect();
@@ -179,7 +157,7 @@ START_TEST(test_gmcast_w_user_messages)
     gu::ssl_register_params(conf);
     gcomm::Conf::register_params(conf);
     mark_point();
-    auto_ptr<Protonet> pnet(Protonet::create(conf));
+    unique_ptr<Protonet> pnet(Protonet::create(conf));
     mark_point();
     User u1(*pnet, "127.0.0.1:0", "");
     pnet->insert(&u1.pstack());
@@ -189,7 +167,7 @@ START_TEST(test_gmcast_w_user_messages)
 
     pnet->event_loop(Sec/10);
 
-    fail_unless(u1.recvd() == 0);
+    ck_assert(u1.recvd() == 0);
 
     log_info << "u2 start";
     User u2(*pnet, "127.0.0.1:0",
@@ -253,10 +231,10 @@ START_TEST(test_gmcast_w_user_messages)
         pnet->event_loop(Sec/10);
     }
 
-    fail_unless(u1.recvd() != 0);
-    fail_unless(u2.recvd() != 0);
-    fail_unless(u3.recvd() != 0);
-    fail_unless(u4.recvd() != 0);
+    ck_assert(u1.recvd() != 0);
+    ck_assert(u2.recvd() != 0);
+    ck_assert(u3.recvd() != 0);
+    ck_assert(u4.recvd() != 0);
 
     pnet->erase(&u4.pstack());
     pnet->erase(&u3.pstack());
@@ -281,7 +259,7 @@ START_TEST(test_gmcast_auto_addr)
     gu::Config conf;
     gu::ssl_register_params(conf);
     gcomm::Conf::register_params(conf);
-    auto_ptr<Protonet> pnet(Protonet::create(conf));
+    unique_ptr<Protonet> pnet(Protonet::create(conf));
     Transport* tp1 = Transport::create(*pnet, "gmcast://?gmcast.group=test");
     Transport* tp2 = Transport::create(*pnet, "gmcast://127.0.0.1:4567"
               "?gmcast.group=test&gmcast.listen_addr=tcp://127.0.0.1:10002");
@@ -317,7 +295,7 @@ START_TEST(test_gmcast_forget)
     gu::Config conf;
     gu::ssl_register_params(conf);
     gcomm::Conf::register_params(conf);
-    auto_ptr<Protonet> pnet(Protonet::create(conf));
+    unique_ptr<Protonet> pnet(Protonet::create(conf));
     Transport* tp1 = Transport::create(*pnet, "gmcast://"
                     "?gmcast.group=test&gmcast.listen_addr=tcp://127.0.0.1:0");
     pnet->insert(&tp1->pstack());
@@ -380,7 +358,7 @@ START_TEST(test_trac_380)
     gu::Config conf;
     gu::ssl_register_params(conf);
     gcomm::Conf::register_params(conf);
-    std::auto_ptr<gcomm::Protonet> pnet(gcomm::Protonet::create(conf));
+    std::unique_ptr<gcomm::Protonet> pnet(gcomm::Protonet::create(conf));
 
     // caused either assertion or exception
     gcomm::Transport* tp1(gcomm::Transport::create(
@@ -395,9 +373,9 @@ START_TEST(test_trac_380)
     }
     catch (gu::Exception& e)
     {
-        fail_unless(e.get_errno() == EINVAL,
-                    "unexpected errno: %d, cause %s",
-                    e.get_errno(), e.what());
+        ck_assert_msg(e.get_errno() == EINVAL,
+                      "unexpected errno: %d, cause %s",
+                      e.get_errno(), e.what());
     }
     pnet->erase(&tp1->pstack());
     tp1->close();
@@ -414,7 +392,7 @@ START_TEST(test_trac_828)
     gu::Config conf;
     gu::ssl_register_params(conf);
     gcomm::Conf::register_params(conf);
-    std::auto_ptr<gcomm::Protonet> pnet(gcomm::Protonet::create(conf));
+    std::unique_ptr<gcomm::Protonet> pnet(gcomm::Protonet::create(conf));
 
     // If the bug is present, this will throw because of own address being
     // in address list.
@@ -429,12 +407,76 @@ START_TEST(test_trac_828)
     }
     catch (gu::Exception& e)
     {
-        fail("test_trac_828, expcetion thrown because of having own address "
-             "in address list");
+        ck_abort_msg("test_trac_828, expcetion thrown because of having own "
+                     "address in address list");
     }
 }
 END_TEST
 
+START_TEST(test_gmcast_ipv6)
+{
+    log_info << "START test_gmcast_ipv6";
+    gu::Config conf;
+    gu::ssl_register_params(conf);
+    gcomm::Conf::register_params(conf);
+    conf.set("base_host", "ip6-localhost");
+    gu_log_max_level = GU_LOG_DEBUG;
+    std::unique_ptr<gcomm::Protonet> pnet(gcomm::Protonet::create(conf));
+
+    // Without scheme
+    {
+        std::unique_ptr<Transport> tp(gcomm::Transport::create(
+                                        *pnet,
+                                        "gmcast://[::1]:4567?"
+                                        "gmcast.group=test&"
+                                        "gmcast.listen_addr=tcp://[::1]:4567"));
+        tp->connect();
+        tp->close();
+    }
+
+    {
+        std::unique_ptr<Transport> tp(gcomm::Transport::create(
+                                        *pnet,
+                                        "gmcast://ip6-localhost:4567?"
+                                        "gmcast.group=test&"
+                                        "gmcast.listen_addr=tcp://ip6-localhost:4567"));
+        tp->connect();
+        tp->close();
+    }
+
+    {
+        std::unique_ptr<Transport> tp(gcomm::Transport::create(
+                                        *pnet,
+                                        "gmcast://[::1]?"
+                                        "gmcast.group=test&"
+                                        "gmcast.listen_addr=tcp://[::1]"));
+        tp->connect();
+        tp->close();
+    }
+
+    {
+        std::unique_ptr<Transport> tp(gcomm::Transport::create(
+                                        *pnet,
+                                        "gmcast://ip6-localhost?"
+                                        "gmcast.group=test&"
+                                        "gmcast.listen_addr=tcp://ip6-localhost"));
+        tp->connect();
+        tp->close();
+    }
+    {
+        gcomm::Protolay::sync_param_cb_t spcb;
+        std::unique_ptr<Transport> tp(gcomm::Transport::create(
+                                        *pnet,
+                                        "gmcast://ip6-localhost?"
+                                        "gmcast.group=test&"
+                                        "gmcast.listen_addr=tcp://[2001:db8:10:9464::233]:4567"));
+        log_info << tp->configured_listen_addr();
+        log_info << conf;
+        ck_assert(tp->configured_listen_addr() == "tcp://[2001:db8:10:9464::233]:4567");
+    }
+    log_info << "END test_gmcast_ipv6";
+}
+END_TEST
 
 Suite* gmcast_suite()
 {
@@ -442,39 +484,40 @@ Suite* gmcast_suite()
     Suite* s = suite_create("gmcast");
     TCase* tc;
 
-    if (run_all_tests == true)
+    if (test_multicast == true)
     {
-        if (test_multicast == true)
-        {
-            tc = tcase_create("test_gmcast_multicast");
-            tcase_add_test(tc, test_gmcast_multicast);
-            suite_add_tcase(s, tc);
-        }
-
-        tc = tcase_create("test_gmcast_w_user_messages");
-        tcase_add_test(tc, test_gmcast_w_user_messages);
-        tcase_set_timeout(tc, 30);
-        suite_add_tcase(s, tc);
-
-        // not run by default, hard coded port
-        tc = tcase_create("test_gmcast_auto_addr");
-        tcase_add_test(tc, test_gmcast_auto_addr);
-        suite_add_tcase(s, tc);
-
-        tc = tcase_create("test_gmcast_forget");
-        tcase_add_test(tc, test_gmcast_forget);
-        tcase_set_timeout(tc, 20);
-        suite_add_tcase(s, tc);
-
-        // not run by default, hard coded port
-        tc = tcase_create("test_trac_380");
-        tcase_add_test(tc, test_trac_380);
-        suite_add_tcase(s, tc);
-
-        tc = tcase_create("test_trac_828");
-        tcase_add_test(tc, test_trac_828);
+        tc = tcase_create("test_gmcast_multicast");
+        tcase_add_test(tc, test_gmcast_multicast);
         suite_add_tcase(s, tc);
     }
+
+    tc = tcase_create("test_gmcast_w_user_messages");
+    tcase_add_test(tc, test_gmcast_w_user_messages);
+    tcase_set_timeout(tc, 30);
+    suite_add_tcase(s, tc);
+
+    // not run by default, hard coded port
+    tc = tcase_create("test_gmcast_auto_addr");
+    tcase_add_test(tc, test_gmcast_auto_addr);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_gmcast_forget");
+    tcase_add_test(tc, test_gmcast_forget);
+    tcase_set_timeout(tc, 20);
+    suite_add_tcase(s, tc);
+
+    // not run by default, hard coded port
+    tc = tcase_create("test_trac_380");
+    tcase_add_test(tc, test_trac_380);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_trac_828");
+    tcase_add_test(tc, test_trac_828);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("test_gmcast_ipv6");
+    tcase_add_test(tc, test_gmcast_ipv6);
+    suite_add_tcase(s, tc);
 
     return s;
 

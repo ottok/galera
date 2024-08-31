@@ -10,6 +10,9 @@
 
 static std::string const Delim = ".";
 
+std::string const BaseHost(COMMON_BASE_HOST_KEY);
+std::string const BasePort(COMMON_BASE_PORT_KEY);
+
 // Protonet
 std::string const gcomm::Conf::ProtonetBackend("protonet.backend");
 std::string const gcomm::Conf::ProtonetVersion("protonet.version");
@@ -22,6 +25,8 @@ std::string const gcomm::Conf::SocketChecksum =
     SocketPrefix + "checksum";
 std::string const gcomm::Conf::SocketRecvBufSize =
     SocketPrefix + "recv_buf_size";
+std::string const gcomm::Conf::SocketSendBufSize =
+    SocketPrefix + "send_buf_size";
 
 // GMCast
 std::string const gcomm::Conf::GMCastScheme = "gmcast";
@@ -117,11 +122,11 @@ std::string const gcomm::Conf::PcRecovery = PcPrefix + "recovery";
 void
 gcomm::Conf::register_params(gu::Config& cnf)
 {
-#define GCOMM_CONF_ADD(_x_) cnf.add(_x_);
-#define GCOMM_CONF_ADD_DEFAULT(_x_) cnf.add(_x_, Defaults::_x_);
+#define GCOMM_CONF_ADD(_x_) cnf.add(_x_, Flags::_x_);
+#define GCOMM_CONF_ADD_DEFAULT(_x_) cnf.add(_x_, Defaults::_x_, Flags::_x_);
 
-    GCOMM_CONF_ADD (COMMON_BASE_HOST_KEY);
-    GCOMM_CONF_ADD (COMMON_BASE_PORT_KEY);
+    GCOMM_CONF_ADD (BaseHost);
+    GCOMM_CONF_ADD (BasePort);
 
     GCOMM_CONF_ADD_DEFAULT(ProtonetBackend);
     GCOMM_CONF_ADD_DEFAULT(ProtonetVersion);
@@ -129,6 +134,7 @@ gcomm::Conf::register_params(gu::Config& cnf)
     GCOMM_CONF_ADD        (TcpNonBlocking);
     GCOMM_CONF_ADD_DEFAULT(SocketChecksum);
     GCOMM_CONF_ADD_DEFAULT(SocketRecvBufSize);
+    GCOMM_CONF_ADD_DEFAULT(SocketSendBufSize);
 
     GCOMM_CONF_ADD_DEFAULT(GMCastVersion);
     GCOMM_CONF_ADD        (GMCastGroup);
@@ -190,6 +196,15 @@ void gcomm::Conf::check_params(const gu::Config& conf)
 size_t gcomm::Conf::check_recv_buf_size(const std::string& str)
 {
     // signed type to check for negative values
-    return check_range<long long>(SocketRecvBufSize, str,
-                                  0, std::numeric_limits<long long>::max());
+    return (str == Defaults::SocketRecvBufSize ||
+            check_range<long long>(SocketRecvBufSize, str,
+                                   0, std::numeric_limits<long long>::max()));
+}
+
+size_t gcomm::Conf::check_send_buf_size(const std::string& str)
+{
+    // signed type to check for negative values
+    return (str == Defaults::SocketSendBufSize ||
+            check_range<long long>(SocketSendBufSize, str,
+                                   0, std::numeric_limits<long long>::max()));
 }

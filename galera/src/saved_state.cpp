@@ -5,11 +5,10 @@
 #include "saved_state.hpp"
 #include <gu_dbug.h>
 #include <gu_uuid.hpp>
+#include "gu_inttypes.hpp"
 
 #include <fstream>
 
-#define __STDC_FORMAT_MACROS
-#include <inttypes.h>
 #include <sys/file.h>
 #include <fcntl.h>
 
@@ -49,7 +48,7 @@ SavedState::SavedState  (const std::string& file) :
 
     if (!fs_)
     {
-        gu_throw_error(errno)
+        gu_throw_system_error(errno)
             << "Could not open state file for writing: '" << file
             << "'. Check permissions and/or disk space.";
     }

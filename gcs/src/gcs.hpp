@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2017 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2021 Codership Oy <info@codership.com>
  *
  * $Id$
  */
@@ -19,6 +19,7 @@
 #include <gu_uuid.hpp>
 #include <gu_gtid.hpp>
 #include <gu_status.hpp>
+#include <gu_progress.hpp>
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -58,6 +59,7 @@ typedef struct gcs_conn gcs_conn_t;
  */
 extern gcs_conn_t*
 gcs_create  (gu_config_t* conf, gcache_t* cache,
+             gu::Progress<gcs_seqno_t>::Callback* progress_cb,
              const char* node_name, const char* inc_addr,
              int repl_proto_ver, int appl_proto_ver);
 
@@ -74,7 +76,7 @@ gcs_create  (gu_config_t* conf, gcache_t* cache,
  *                 application state.
  *                 Should be undefined for undefined state.
  *
- * @return 0 in case of success, -EBUSY if conneciton is already opened,
+ * @return 0 in case of success, -EBUSY if connection is already opened,
  *         -EBADFD if connection object is being destroyed.
  */
 extern long gcs_init (gcs_conn_t*     conn,
@@ -158,6 +160,7 @@ typedef enum gcs_act_type
     GCS_ACT_VOTE,       //! vote on GTID outcome
     GCS_ACT_SERVICE,    //! service action, sent by GCS
     GCS_ACT_ERROR,      //! error happened while receiving the action
+    GCS_ACT_INCONSISTENCY,//! inconsistency event
     GCS_ACT_UNKNOWN     //! undefined/unknown action type
 }
 gcs_act_type_t;
@@ -466,14 +469,6 @@ struct gcs_act_cchange
 std::ostream&
 operator <<(std::ostream& os, const struct gcs_act_cchange& cc);
 
-struct gcs_backend_stats {
-    struct stats_t {
-        const char* key;
-        const char* value;
-    }* stats;
-    void* ctx;
-};
-
 struct gcs_stats
 {
     double    send_q_len_avg; //! average send queue length per send call
@@ -490,7 +485,8 @@ struct gcs_stats
     int       send_q_len;     //! current send queue length
     int       send_q_len_max; //! maximum send queue length
     int       send_q_len_min; //! minimum send queue length
-    struct gcs_backend_stats backend_stats; //! backend stats.
+    bool      fc_active;      //! flow control is currently active
+    bool      fc_requested;   //! flow control is requested by this node
 };
 
 /*! Fills stats struct */
