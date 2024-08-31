@@ -1,3 +1,16 @@
+galera-4 (26.4.20-0ubuntu0.20.04.1) UNRELEASED; urgency=medium
+
+  * New upstream release 26.4.20. This and all the previous versions include
+    multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.20.txt
+  * New upstream signing key 3D53839A70BC938B08CDD47F45460A518DA84635,
+    verified from 26.4.17 release notes
+  * Upstream version 26.4.5 was first official release for general availability.
+    It included all patches carried in Debian until then, thus they are safe to
+    drop. There is no functional change in resulting Ubuntu package.
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 31 Aug 2024 00:14:42 -0700
+
 galera-4 (26.4.3-4) unstable; urgency=medium
 
   [ Otto Kekäläinen ]
