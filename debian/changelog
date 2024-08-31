@@ -1,3 +1,12 @@
+galera-4 (26.4.20-0+deb12u1) bookworm; urgency=medium
+
+  * New upstream release 26.4.20. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.20.txt
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.19.txt
+  * Adopt gbp.conf from 'debian/latest' but adopt it for 'debian/12-bookworm'
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 31 Aug 2024 00:26:53 -0700
+
 galera-4 (26.4.18-0+deb12u1) bookworm; urgency=medium
 
   * Switch to upstream aware DEP-14 branch structure in gbp.conf
