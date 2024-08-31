@@ -16,6 +16,7 @@
 #include "wsrep_params.hpp"
 #include "gu_event_service.hpp"
 #include "wsrep_config_service.h"
+#include "wsrep_node_isolation.h"
 
 #include <cassert>
 
@@ -977,14 +978,25 @@ wsrep_status_t galera_append_key(wsrep_t*           const gh,
 
     try
     {
+        int const proto_ver(repl->trx_proto_ver());
         TrxHandleLock lock(*trx);
-        for (size_t i(0); i < keys_num; ++i)
+
+        if (keys_num > 0)
         {
-            galera::KeyData k (repl->trx_proto_ver(),
-                               keys[i].key_parts,
-                               keys[i].key_parts_num,
-                               key_type,
-                               copy);
+            for (size_t i(0); i < keys_num; ++i)
+            {
+                galera::KeyData const k(proto_ver,
+                                        keys[i].key_parts,
+                                        keys[i].key_parts_num,
+                                        key_type,
+                                        copy);
+                gu_trace(trx->append_key(k));
+            }
+        }
+        else if (proto_ver >= 6)
+        {
+            /* Append server-level key (matches every trx)*/
+            galera::KeyData const k(proto_ver, key_type);
             gu_trace(trx->append_key(k));
         }
         retval = WSREP_OK;
@@ -1465,7 +1477,7 @@ wsrep_seqno_t galera_pause (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_warn << "Node pause failed: " << e.what();
         return -e.get_errno();
     }
 }
@@ -1486,7 +1498,7 @@ wsrep_status_t galera_resume (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_error << "Node resume failed: " << e.what();
         return WSREP_NODE_FAIL;
     }
 }
@@ -1507,7 +1519,7 @@ wsrep_status_t galera_desync (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_warn << "Node desync failed: " << e.what();
         return WSREP_TRX_FAIL;
     }
 }
@@ -1528,7 +1540,7 @@ wsrep_status_t galera_resync (wsrep_t* gh)
     }
     catch (gu::Exception& e)
     {
-        log_error << e.what();
+        log_error << "Node resync failed: " << e.what();
         return WSREP_NODE_FAIL;
     }
 }
@@ -1776,4 +1788,21 @@ extern "C"
 void wsrep_deinit_config_service_v1()
 {
     gu::Config::enable_deprecation_check();
+}
+
+/*
+ * This function may be called from signal handler, so make sure that
+ * only 'safe' system calls and library functions are used. See
+ * https://pubs.opengroup.org/onlinepubs/009695399/functions/xsh_chap02_04.html
+ */
+extern "C" enum wsrep_node_isolation_result
+wsrep_node_isolation_mode_set_v1(enum wsrep_node_isolation_mode mode)
+{
+    if (mode < WSREP_NODE_ISOLATION_NOT_ISOLATED
+        || mode > WSREP_NODE_ISOLATION_FORCE_DISCONNECT)
+    {
+        return WSREP_NODE_ISOLATION_INVALID_VALUE;
+    }
+    gu::gu_asio_node_isolation_mode = mode;
+    return WSREP_NODE_ISOLATION_SUCCESS;
 }

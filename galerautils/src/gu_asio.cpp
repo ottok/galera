@@ -245,6 +245,11 @@ std::ostream& gu::operator<<(std::ostream& os, const gu::AsioErrorCode& ec)
     return (os << ec.message());
 }
 
+gu::AsioErrorCode gu::AsioErrorCode::make_eof()
+{
+  return {asio::error::misc_errors::eof, gu_asio_misc_category};
+}
+
 bool gu::AsioErrorCode::is_eof() const
 {
     return (category_ &&
@@ -303,12 +308,21 @@ namespace
 
         std::string get_password() const
         {
-            std::string   file(conf_.get(gu::conf::ssl_password_file));
+            std::string   file;
+            try {
+                file = conf_.get(gu::conf::ssl_password_file);
+            }
+            catch (const gu::NotSet&)
+            {
+                gu_throw_error(EINVAL)
+                << gu::conf::ssl_password_file << " is required";
+            }
+
             std::ifstream ifs(file.c_str(), std::ios_base::in);
 
             if (ifs.good() == false)
             {
-                gu_throw_error(errno) <<
+                gu_throw_system_error(errno) <<
                     "could not open password file '" << file << "'";
             }
 
@@ -316,6 +330,7 @@ namespace
             std::getline(ifs, ret);
             return ret;
         }
+
     private:
         const gu::Config& conf_;
     };
@@ -590,20 +605,20 @@ void gu::ssl_init_options(gu::Config& conf)
         conf.set(conf::ssl_cipher, cipher_list);
 
         // compression
-        bool compression(conf.get(conf::ssl_compression, true));
-        if (compression == false)
+        try
         {
-            log_info << "disabling SSL compression";
-            sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
-        }
-        else
-        {
+            (void) conf.get(conf::ssl_compression);
+            // warn the user if socket.ssl_compression is set explicitly
             log_warn << "SSL compression is not effective. The option "
                      << conf::ssl_compression << " is deprecated and "
                      << "will be removed in future releases.";
         }
-        conf.set(conf::ssl_compression, compression);
-
+        catch (NotSet&)
+        {
+            // this is a desirable situation
+        }
+        log_info << "not using SSL compression";
+        sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
 
         // verify that asio::ssl::context can be initialized with provided
         // values
@@ -896,3 +911,7 @@ void gu::deinit_allowlist_service_v1()
     --gu_allowlist_service_usage;
     if (gu_allowlist_service_usage == 0) gu_allowlist_service = 0;
 }
+
+std::atomic<enum wsrep_node_isolation_mode> gu::gu_asio_node_isolation_mode{
+    WSREP_NODE_ISOLATION_NOT_ISOLATED
+};

@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2010-2018 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2024 Codership Oy <info@codership.com>
 //
 
 
@@ -432,6 +432,7 @@ namespace galera
                 case WriteSetNG::VER3:
                 case WriteSetNG::VER4:
                 case WriteSetNG::VER5:
+                case WriteSetNG::VER6:
                     write_set_.read_buf (act.buf, act.size);
                     assert(version_ == write_set_.version());
                     write_set_flags_ = fixup_write_set_flags(
@@ -858,14 +859,6 @@ namespace galera
 
         void append_key(const KeyData& key)
         {
-            // Current limitations with certification on trx versions 3 to 5
-            // impose the the following restrictions on keys
-
-            // The shared key behavior for TOI operations is completely
-            // untested, so don't allow it (and it probably does not even
-            // make any sense)
-            assert(is_toi() == false  || key.shared() == false);
-
             /*! protection against protocol change during trx lifetime */
             if (key.proto_ver != version())
             {
