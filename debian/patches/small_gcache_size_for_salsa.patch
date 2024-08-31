@@ -24,5 +24,5 @@ Subject: Reduce galera.cache size test for Salsa
 -            NULL, // const char* options
 +            "gcache.page_size=8M;gcache.size=8M", // const char* options
              0,    // int         proto_ver
-
+ 
              /* Application initial state information. */

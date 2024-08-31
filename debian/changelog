@@ -1,3 +1,16 @@
+galera-4 (26.4.20-0ubuntu0.24.04.1) noble; urgency=medium
+
+  * New upstream release 26.4.20. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.20.txt
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.19.txt
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.18.txt
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.17.txt
+  * Drop build issue patch that was merged into upstream release 20.4.18
+  * New upstream signing key 3D53839A70BC938B08CDD47F45460A518DA84635,
+    verified from 26.4.17 release notes
+
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 30 Aug 2024 23:11:35 -0700
+
 galera-4 (26.4.16-2build4) noble; urgency=medium
 
   * No-change rebuild against libssl3t64.
