@@ -49,6 +49,8 @@
 #include <fstream>
 #include <mutex>
 
+static wsrep_allowlist_service_v1_t* gu_allowlist_service(0);
+
 //
 // AsioIpAddress wrapper
 //
@@ -243,6 +245,11 @@ std::ostream& gu::operator<<(std::ostream& os, const gu::AsioErrorCode& ec)
     return (os << ec.message());
 }
 
+gu::AsioErrorCode gu::AsioErrorCode::make_eof()
+{
+  return {asio::error::misc_errors::eof, gu_asio_misc_category};
+}
+
 bool gu::AsioErrorCode::is_eof() const
 {
     return (category_ &&
@@ -301,12 +308,21 @@ namespace
 
         std::string get_password() const
         {
-            std::string   file(conf_.get(gu::conf::ssl_password_file));
+            std::string   file;
+            try {
+                file = conf_.get(gu::conf::ssl_password_file);
+            }
+            catch (const gu::NotSet&)
+            {
+                gu_throw_error(EINVAL)
+                << gu::conf::ssl_password_file << " is required";
+            }
+
             std::ifstream ifs(file.c_str(), std::ios_base::in);
 
             if (ifs.good() == false)
             {
-                gu_throw_error(errno) <<
+                gu_throw_system_error(errno) <<
                     "could not open password file '" << file << "'";
             }
 
@@ -314,6 +330,7 @@ namespace
             std::getline(ifs, ret);
             return ret;
         }
+
     private:
         const gu::Config& conf_;
     };
@@ -333,12 +350,22 @@ bool exclude_ssl_error(const asio::error_code& ec)
 {
     switch (ERR_GET_REASON(ec.value()))
     {
+        // Short read errors seem to be generated quite frequently
+        // by SSL library because of broken connections. For Galera
+        // connections premature EOFs are not a problem because messages
+        // are framed and the protocols are fault tolerant by design.
+        // The error to suppress are:
+        // SSL_R_SHORT_READ - OpenSSL < 3.0
+        // SSL_R_UNEXPECTED_EOF_WHILE_READING - OpenSSL >= 3.0
 #ifdef SSL_R_SHORT_READ
     case SSL_R_SHORT_READ:
-        // Short read error seems to be generated quite frequently
-        // by SSL library, probably because broken connections.
         return true;
 #endif /* SSL_R_SHORT_READ */
+#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
+    case SSL_R_UNEXPECTED_EOF_WHILE_READING:
+        // OpenSSL 3.0 and onwards.
+        return true;
+#endif /* SSL_R_UNEXPECTED_EOF_WHILE_READING */
     default:
         return false;
     }
@@ -368,7 +395,7 @@ std::string gu::extra_error_info(const gu::AsioErrorCode& ec)
 
 static SSL_CTX* native_ssl_ctx(asio::ssl::context& context)
 {
-#if ASIO_VERSION < 101601
+#if ASIO_VERSION < 101401
     return context.impl();
 #else
     return context.native_handle();
@@ -505,15 +532,29 @@ static void init_use_ssl(gu::Config& conf)
 void gu::ssl_register_params(gu::Config& conf)
 {
     // register SSL config parameters
-    conf.add(gu::conf::use_ssl);
-    conf.add(gu::conf::ssl_cipher);
-    conf.add(gu::conf::ssl_compression);
-    conf.add(gu::conf::ssl_key);
-    conf.add(gu::conf::ssl_cert);
-    conf.add(gu::conf::ssl_ca);
-    conf.add(gu::conf::ssl_password_file);
-    conf.add(gu::conf::ssl_reload);
-    conf.add(gu::conf::socket_dynamic);
+    conf.add(gu::conf::use_ssl,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::ssl_cipher,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::ssl_compression,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool |
+             gu::Config::Flag::deprecated);
+    conf.add(gu::conf::ssl_key,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_cert,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_ca,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_password_file,
+             gu::Config::Flag::read_only);
+    conf.add(gu::conf::ssl_reload,
+             gu::Config::Flag::type_bool);
+    conf.add(gu::conf::socket_dynamic,
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
 }
 
 void gu::ssl_param_set(const std::string& key, const std::string& val, 
@@ -525,7 +566,7 @@ void gu::ssl_param_set(const std::string& key, const std::string& val,
         {
             try
             {
-#if ASIO_VERSION < 101601
+#if ASIO_VERSION < 101401
                 asio::io_service io_service;
                 asio::ssl::context ctx(io_service, asio::ssl::context::sslv23);
 #else
@@ -564,20 +605,26 @@ void gu::ssl_init_options(gu::Config& conf)
         conf.set(conf::ssl_cipher, cipher_list);
 
         // compression
-        bool compression(conf.get(conf::ssl_compression, true));
-        if (compression == false)
+        try
         {
-            log_info << "disabling SSL compression";
-            sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
+            (void) conf.get(conf::ssl_compression);
+            // warn the user if socket.ssl_compression is set explicitly
+            log_warn << "SSL compression is not effective. The option "
+                     << conf::ssl_compression << " is deprecated and "
+                     << "will be removed in future releases.";
         }
-        conf.set(conf::ssl_compression, compression);
-
+        catch (NotSet&)
+        {
+            // this is a desirable situation
+        }
+        log_info << "not using SSL compression";
+        sk_SSL_COMP_zero(SSL_COMP_get_compression_methods());
 
         // verify that asio::ssl::context can be initialized with provided
         // values
         try
         {
-#if ASIO_VERSION < 101601
+#if ASIO_VERSION < 101401
             asio::io_service io_service;
             asio::ssl::context ctx(io_service, asio::ssl::context::sslv23);
 #else
@@ -696,6 +743,11 @@ void gu::AsioIoService::run_one()
     impl_->native().run_one();
 }
 
+void gu::AsioIoService::poll_one()
+{
+    impl_->native().poll_one();
+}
+
 void gu::AsioIoService::run()
 {
     impl_->native().run();
@@ -810,3 +862,56 @@ void gu::AsioSteadyTimer::cancel()
 {
     impl_->native().cancel();
 }
+
+//
+// Allowlist
+//
+
+bool gu::allowlist_value_check(wsrep_allowlist_key_t key, const std::string& value)
+{
+    if (gu_allowlist_service == nullptr)
+    {
+        return true;
+    }
+    wsrep_buf_t const check_value = { value.c_str(), value.length() };
+    wsrep_status_t result(gu_allowlist_service->allowlist_cb(
+        gu_allowlist_service->context, key, &check_value));
+    switch (result)
+    {
+        case WSREP_OK:
+            return true;
+        case WSREP_NOT_ALLOWED:
+            return false;
+        default:
+            gu_throw_error(EINVAL) << "Unknown allowlist callback response: " << result 
+                                   << ", aborting.";
+    }
+}
+
+static std::mutex gu_allowlist_service_init_mutex;
+static size_t gu_allowlist_service_usage;
+
+int gu::init_allowlist_service_v1(wsrep_allowlist_service_v1_t* allowlist_service)
+{
+    std::lock_guard<std::mutex> lock(gu_allowlist_service_init_mutex);
+    ++gu_allowlist_service_usage;
+    if (gu_allowlist_service)
+    {
+        assert(gu_allowlist_service == allowlist_service);
+        return 0;
+    }
+    gu_allowlist_service = allowlist_service;
+    return 0;
+}
+
+void gu::deinit_allowlist_service_v1()
+{
+    std::lock_guard<std::mutex> lock(gu_allowlist_service_init_mutex);
+    assert(gu_allowlist_service_usage > 0);
+    --gu_allowlist_service_usage;
+    if (gu_allowlist_service_usage == 0) gu_allowlist_service = 0;
+}
+
+std::atomic<enum wsrep_node_isolation_mode> gu::gu_asio_node_isolation_mode{
+    WSREP_NODE_ISOLATION_NOT_ISOLATED
+};

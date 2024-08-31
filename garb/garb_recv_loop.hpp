@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2016 Codership Oy <info@codership.com> */
+/* Copyright (C) 2011-2023 Codership Oy <info@codership.com> */
 
 #ifndef _GARB_RECV_LOOP_HPP_
 #define _GARB_RECV_LOOP_HPP_
@@ -8,6 +8,7 @@
 
 #include <gu_throw.hpp>
 #include <gu_asio.hpp>
+#include <common.h> // COMMON_BASE_DIR_KEY
 
 #include <pthread.h>
 
@@ -24,7 +25,9 @@ public:
 
 private:
 
+    bool one_loop();
     void loop();
+    void close_connection();
 
     const Config& config_;
     gu::Config    gconf_;
@@ -38,6 +41,7 @@ private:
             {
                 gu_throw_fatal << "Error initializing GCS parameters";
             }
+            cnf.add(COMMON_BASE_DIR_KEY);
         }
     }
         params_;
@@ -47,6 +51,7 @@ private:
         ParseOptions(gu::Config& cnf, const std::string& opt)
         {
             cnf.parse(opt);
+            gu::ssl_init_options(cnf);
         }
     }
         parse_;
@@ -56,6 +61,7 @@ private:
     gu::UUID    uuid_;
     gu::seqno_t seqno_;
     int         proto_;
+    bool        closed_;
 
 }; /* RecvLoop */
 

@@ -35,6 +35,7 @@ add_executable(gcs_tests
   ../gcs_params.cpp
   gcs_fc_test.cpp
   ../gcs_fc.cpp
+  ../gcs_error.cpp
   )
 
 target_compile_definitions(gcs_tests
@@ -55,6 +56,7 @@ target_compile_options(gcs_tests
   PRIVATE
   -Wno-conversion
   -Wno-unused-parameter
+  -Wno-vla
   )
 
 target_link_libraries(gcs_tests

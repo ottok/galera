@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2011-2019 Codership Oy <info@codership.com>
+// Copyright (C) 2011-2021 Codership Oy <info@codership.com>
 //
 
 #include "ist.hpp"
@@ -83,16 +83,21 @@ galera::ist::Receiver::RECV_BIND("ist.recv_bind");
 void
 galera::ist::register_params(gu::Config& conf)
 {
-    conf.add(Receiver::RECV_ADDR);
-    conf.add(Receiver::RECV_BIND);
-    conf.add(CONF_KEEP_KEYS);
+    conf.add(Receiver::RECV_ADDR, gu::Config::Flag::read_only);
+    conf.add(Receiver::RECV_BIND, gu::Config::Flag::read_only);
+    // Made hidden because undocumented
+    conf.add(CONF_KEEP_KEYS,
+             gu::Config::Flag::hidden |
+             gu::Config::Flag::read_only |
+             gu::Config::Flag::type_bool);
 }
 
 galera::ist::Receiver::Receiver(gu::Config&           conf,
                                 gcache::GCache&       gc,
                                 TrxHandleSlave::Pool& slave_pool,
                                 EventHandler&         handler,
-                                const char*           addr)
+                                const char*           addr,
+                                gu::Progress<wsrep_seqno_t>::Callback* cb)
     :
     recv_addr_    (),
     recv_bind_    (),
@@ -100,6 +105,7 @@ galera::ist::Receiver::Receiver(gu::Config&           conf,
     acceptor_     (),
     mutex_        (),
     cond_         (),
+    progress_cb_  (cb),
     first_seqno_  (WSREP_SEQNO_UNDEFINED),
     last_seqno_   (WSREP_SEQNO_UNDEFINED),
     current_seqno_(WSREP_SEQNO_UNDEFINED),
@@ -335,7 +341,6 @@ galera::ist::Receiver::prepare(wsrep_seqno_t const first_seqno,
     return recv_addr_;
 }
 
-
 void galera::ist::Receiver::run()
 {
     auto socket(acceptor_->accept());
@@ -345,6 +350,7 @@ void galera::ist::Receiver::run()
     gu::Progress<wsrep_seqno_t>* progress(NULL);
 
     int ec(0);
+    std::ostringstream error_os;
 
     try
     {
@@ -390,9 +396,8 @@ void galera::ist::Receiver::run()
                 assert(!progress);
                 if (act.seqno_g > first_seqno_)
                 {
-                    log_error
-                        << "IST started with wrong seqno: " << act.seqno_g
-                        << ", expected <= " << first_seqno_;
+                    error_os << "IST started with wrong seqno: " << act.seqno_g
+                             << ", expected <= " << first_seqno_;
                     ec = EINVAL;
                     goto err;
                 }
@@ -400,6 +405,7 @@ void galera::ist::Receiver::run()
                          << act.seqno_g;
                 current_seqno_ = act.seqno_g;
                 progress = new gu::Progress<wsrep_seqno_t>(
+                    progress_cb_,
                     "Receiving IST", " events",
                     last_seqno_ - current_seqno_ + 1,
                     /* The following means reporting progress NO MORE frequently
@@ -417,8 +423,8 @@ void galera::ist::Receiver::run()
 
             if (act.seqno_g != current_seqno_)
             {
-                log_error << "Unexpected action seqno: " << act.seqno_g
-                          << " expected: " << current_seqno_;
+                error_os << "Unexpected action seqno: " << act.seqno_g
+                         << " expected: " << current_seqno_;
                 ec = EINVAL;
                 goto err;
             }
@@ -481,7 +487,7 @@ void galera::ist::Receiver::run()
         ec = e.get_errno();
         if (ec != EINTR)
         {
-            log_error << "got exception while reading IST stream: " << e.what();
+            error_os << "got exception while reading IST stream: " << e.what();
         }
     }
 
@@ -491,17 +497,18 @@ err:
     socket->close();
 
     running_ = false;
-    if (last_seqno_ > 0 && ec != EINTR && current_seqno_ < last_seqno_)
+    if (last_seqno_ > 0 && ec != EINTR && current_seqno_ < last_seqno_ &&
+        error_os.tellp() == 0)
     {
-        log_error << "IST didn't contain all write sets, expected last: "
-                  << last_seqno_ << " last received: " << current_seqno_;
+        error_os << "IST didn't contain all write sets, expected last: "
+                 << last_seqno_ << " last received: " << current_seqno_;
         ec = EPROTO;
     }
     if (ec != EINTR)
     {
         error_code_ = ec;
     }
-    handler_.ist_end(ec);
+    handler_.ist_end(Result{ec, error_os.str()});
 }
 
 
@@ -769,7 +776,7 @@ void galera::ist::AsyncSenderMap::run(const gu::Config&   conf,
     if (err != 0)
     {
         delete as;
-        gu_throw_error(err) << "failed to start sender thread";
+        gu_throw_system_error(err) << "failed to start sender thread";
     }
     senders_.insert(as);
 }

@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2010-2020 Codership Oy <info@codership.com>
+// Copyright (C) 2010-2021 Codership Oy <info@codership.com>
 //
 
 //! @file replicator_smm.hpp
@@ -11,6 +11,7 @@
 #define GALERA_REPLICATOR_SMM_HPP
 
 #include "replicator.hpp"
+#include "progress_callback.hpp"
 
 #include "gu_init.h"
 #include "GCache.hpp"
@@ -179,9 +180,9 @@ namespace galera
 
         // IST Action handler interface
         void ist_trx(const TrxHandleSlavePtr& ts, bool must_apply,
-                     bool preload);
-        void ist_cc(const gcs_action&, bool must_apply, bool preload);
-        void ist_end(int error);
+                     bool preload) override;
+        void ist_cc(const gcs_action&, bool must_apply, bool preload) override;
+        void ist_end(const ist::Result&) override;
 
         // Cancel local and enter apply monitors for TrxHandle
         void cancel_monitors_for_local(const TrxHandleSlave& ts)
@@ -259,15 +260,15 @@ namespace galera
                 mutex_(),
                 cond_(),
                 eof_(false),
-                error_(0),
+                result_(0, ""),
                 queue_()
             { }
-            void reset() { eof_ = false; error_ = 0; }
-            void eof(int error)
+            void reset() { eof_ = false; result_ = ist::Result{0, ""}; }
+            void eof(const ist::Result& result)
             {
                 gu::Lock lock(mutex_);
                 eof_ = true;
-                error_ = error;
+                result_ = result;
                 cond_.broadcast();
             }
 
@@ -308,12 +309,14 @@ namespace galera
                 }
                 else
                 {
-                    if (error_)
+                    if (result_.error)
                     {
-                        int err(error_);
-                        error_ = 0; // Make just one thread to detect the failure
+                        int err(result_.error);
+                        // Make just one thread to detect the failure
+                        result_.error = 0;
                         gu_throw_error(err)
-                            << "IST receiver reported failure";
+                            << "IST receiver reported failure: '"
+                            << result_.error_str << "' (" << err << ")";
                     }
                 }
 
@@ -324,7 +327,7 @@ namespace galera
             gu::Mutex mutex_;
             gu::Cond  cond_;
             bool eof_;
-            int error_;
+            ist::Result result_;
             std::queue<ISTEvent> queue_;
         };
 
@@ -410,6 +413,7 @@ namespace galera
         {
             if (gu_unlikely(purge_seqno != -1))
             {
+                assert(purge_seqno <= last_committed());
                 service_thd_.report_last_committed(purge_seqno);
             }
         }
@@ -464,8 +468,6 @@ namespace galera
                                          const TrxHandleSlavePtr&);
         wsrep_status_t cert_and_catch   (TrxHandleMaster*,
                                          const TrxHandleSlavePtr&);
-        wsrep_status_t cert_for_aborted (const TrxHandleSlavePtr&);
-
         // Enter apply monitor for local transaction. Return true
         // if apply monitor was grabbed.
         bool enter_apply_monitor_for_local(TrxHandleMaster&,
@@ -538,6 +540,12 @@ namespace galera
                         GU_DBUG_SYNC_WAIT("local_monitor_slave_enter_sync");
                         mutex.lock();
                     }
+                }
+                else
+                {
+                    mutex.unlock();
+                    GU_DBUG_SYNC_WAIT("local_monitor_enter_sync");
+                    mutex.lock();
                 }
             }
 #endif //GU_DBUG_ON
@@ -864,7 +872,7 @@ namespace galera
                                      ssize_t             sst_req_len);
 
         /* resume reception of GCS events */
-        void resume_recv() { gcs_.resume_recv(); ist_end(0); }
+        void resume_recv() { gcs_.resume_recv(); ist_end(ist::Result{0, ""}); }
 
         /* These methods facilitate closing procedure.
          * They must be called under closing_mutex_ lock */
@@ -919,6 +927,7 @@ namespace galera
          * |                 9 | SS keys   4 |              2 |               2 |
          * | 4.x            10 | PA range/ 5 | CC events /  3 |               2 |
          * |                   | UPD keys    | idx preload    |                 |
+         * |                11 | SRV keys  6 |              3 |               2 |
          * |--------------------------------------------------------------------|
          *
          * Note: str_proto_ver is decided in replicator_str.cpp based on
@@ -983,13 +992,16 @@ namespace galera
         bool          sst_received_;
 
         // services
-        gcache::GCache gcache_;
-        GCS_IMPL       gcs_;
-        ServiceThd     service_thd_;
+        ProgressCallback<int64_t> gcache_progress_cb_;
+        gcache::GCache   gcache_;
+        ProgressCallback<gcs_seqno_t> joined_progress_cb_;
+        GCS_IMPL         gcs_;
+        ServiceThd       service_thd_;
 
         // action sources
         TrxHandleSlave::Pool slave_pool_;
         ActionSource*        as_;
+        ProgressCallback<wsrep_seqno_t>ist_progress_cb_;
         ist::Receiver        ist_receiver_;
         ist::AsyncSenderMap  ist_senders_;
 

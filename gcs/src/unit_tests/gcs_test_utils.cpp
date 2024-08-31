@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2020 Codership Oy <info@codership.com>
+ * Copyright (C) 2015-2021 Codership Oy <info@codership.com>
  */
 
 #include "gcs_test_utils.hpp"
@@ -46,14 +46,14 @@ GcsGroup::common_ctor(const char*  node_name,
     assert(false == initialized_);
 
     conf_.set("gcache.name", std::string(node_name) + ".cache");
-    gcache_ = new gcache::GCache(conf_, ".");
+    gcache_ = new gcache::GCache(NULL, conf_, ".");
 
     int const err(gcs_group_init(&group_, &conf_,
                                  reinterpret_cast<gcache_t*>(gcache_),
                                  node_name, inc_addr, gver, rver, aver));
     if (err)
     {
-        gu_throw_error(-err) << "GcsGroup init failed";
+        gu_throw_error(-err) << "GcsGroup init failed: " << -err;
     }
 
     initialized_ = true;
@@ -452,7 +452,7 @@ gt_group::sst_start (int const joiner_idx,const char* donor_name)
         int ret = gcs_group_handle_state_request(nodes[i]->group(), &req);
 
         if (ret < 0) { // don't fail here, we may want to test negatives
-            gu_error (ret < 0, "Handling state request to '%s' failed: %d (%s)",
+            gu_error ("Handling state request to '%s' failed: %d (%s)",
                       donor_name, ret, strerror (-ret));
             return ret;
         }

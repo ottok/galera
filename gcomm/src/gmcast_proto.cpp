@@ -6,6 +6,17 @@
 #include "gmcast.hpp"
 
 #include "gu_uri.hpp"
+#include "gu_event_service.hpp"
+
+static void emit_evicted_event()
+{
+    std::ostringstream os;
+    os << "{\"status\": \"evicted\", "
+       << "\"message\": "
+       << "\"This node was evicted permanently from cluster, "
+       << "restart is required\"}";
+    gu::EventService::callback("event", os.str());
+}
 
 static const std::string gmcast_proto_err_evicted("evicted");
 static const std::string gmcast_proto_err_invalid_group("invalid group");
@@ -271,15 +282,16 @@ void gcomm::gmcast::Proto::handle_ok(const Message& hs)
 
 void gcomm::gmcast::Proto::handle_failed(const Message& hs)
 {
-    log_warn << "handshake with " << remote_uuid_ << " "
-             << remote_addr_ << " failed: '"
-             << hs.error() << "'";
+    log_debug << "handshake with " << remote_uuid_ << " "
+              << remote_addr_ << " failed: '"
+              << hs.error() << "'";
     set_state(S_FAILED);
     if (hs.error() == gmcast_proto_err_evicted)
     {
         // otherwise node use the uuid in view state file.
         // which is probably still in other nodes evict list.
         gmcast_.remove_viewstate_file();
+        emit_evicted_event();
         gu_throw_fatal
             << "this node has been evicted out of the cluster, "
             << "gcomm backend restart is required";
@@ -288,7 +300,7 @@ void gcomm::gmcast::Proto::handle_failed(const Message& hs)
     {
         if (gmcast_.prim_view_reached())
         {
-            log_warn << "Received duplicate UUID error from other node "
+            log_info << "Received duplicate UUID error from other node "
                      << "while in primary component. This may mean that "
                      << "this node's IP address has changed. Will close "
                      << "connection and keep on retrying";

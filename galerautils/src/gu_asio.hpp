@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2014-2020 Codership Oy <info@codership.com>
+// Copyright (C) 2014-2024 Codership Oy <info@codership.com>
 //
 
 
@@ -14,9 +14,13 @@
 #include "gu_uri.hpp"
 #include "gu_signals.hpp"
 
+#include "wsrep_allowlist_service.h"
+#include "wsrep_node_isolation.h"
+
 #include <netinet/tcp.h> // tcp_info
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -240,6 +244,8 @@ namespace gu
 
         bool operator!() const { return value_ == 0; }
 
+
+        static AsioErrorCode make_eof();
         /**
          * Return true if the error is end of file.
          */
@@ -293,7 +299,7 @@ namespace gu
         /**
          * This will be called after asynchronous connection to the
          * remote endpoint after call to AsioSocket::async_connect()
-         * completes.
+         * completes, or after accepted socket becomes ready.
          *
          * All internal protocol handshakes (e.g. SSL) will be completed
          * before this handler is called.
@@ -599,6 +605,7 @@ namespace gu
         virtual void listen(const gu::URI& uri) = 0;
         virtual void close() = 0;
         virtual void async_accept(const std::shared_ptr<AsioAcceptorHandler>&,
+                                  const std::shared_ptr<AsioSocketHandler>&,
                                   const std::shared_ptr<AsioStreamEngine>& engine = nullptr) = 0;
         virtual std::shared_ptr<AsioSocket> accept() = 0;
         virtual std::string listen_addr() const = 0;
@@ -660,6 +667,12 @@ namespace gu
          * Run one IO service handler.
          */
         void run_one();
+
+        /**
+	 * Run at most one IO service handler, return immediately
+	 * if no handlers are ready to run.
+	 */
+        void poll_one();
 
         /**
          * Run until IO service is stopped or runs out of work.
@@ -758,6 +771,17 @@ namespace gu
         class Impl;
         std::unique_ptr<Impl> impl_;
     };
+
+    /* Allowlist check callback */
+    bool allowlist_value_check(wsrep_allowlist_key_t key, const std::string& value);
+
+    /* Init/deinit global allowlist service hooks. */
+    int init_allowlist_service_v1(wsrep_allowlist_service_v1_t*);
+    void deinit_allowlist_service_v1();
+    /* Global isolation mode. */
+    extern std::atomic<enum wsrep_node_isolation_mode>
+        gu_asio_node_isolation_mode;
+
 }
 
 #endif // GU_ASIO_HPP

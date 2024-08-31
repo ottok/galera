@@ -1,4 +1,4 @@
-/* Copyright (C) 2011 Codership Oy <info@codership.com> */
+/* Copyright (C) 2011-2024 Codership Oy <info@codership.com> */
 
 #include "garb_config.hpp"
 #include "garb_recv_loop.hpp"
@@ -10,13 +10,24 @@
 #include <stdlib.h> // exit()
 #include <unistd.h> // setsid(), chdir()
 #include <fcntl.h>  // open()
+#include <signal.h> // sigaction
 
 namespace garb
 {
 
 void
-become_daemon ()
+become_daemon (const std::string& workdir)
 {
+    if (chdir("/")) // detach from potentially removable block devices
+    {
+        gu_throw_system_error(errno) << "chdir(" << workdir << ") failed";
+    }
+
+    if (!workdir.empty() && chdir(workdir.c_str()))
+    {
+        gu_throw_system_error(errno) << "chdir(" << workdir << ") failed";
+    }
+
     if (pid_t pid = fork())
     {
         if (pid > 0) // parent
@@ -28,7 +39,7 @@ become_daemon ()
             // I guess we want this to go to stderr as well;
             std::cerr << "Failed to fork daemon process: "
                       << errno << " (" << strerror(errno) << ")";
-            gu_throw_error(errno) << "Failed to fork daemon process";
+            gu_throw_system_error(errno) << "Failed to fork daemon process";
         }
     }
 
@@ -36,12 +47,7 @@ become_daemon ()
 
     if (setsid()<0) // become a new process leader, detach from terminal
     {
-        gu_throw_error(errno) << "setsid() failed";
-    }
-
-    if (chdir("/")) // detach from potentially removable block devices
-    {
-        gu_throw_error(errno) << "chdir(\"/\") failed";
+        gu_throw_system_error(errno) << "setsid() failed";
     }
 
     // umask(0);
@@ -56,7 +62,7 @@ become_daemon ()
         }
         else
         {
-            gu_throw_error(errno) << "Second fork failed";
+            gu_throw_system_error(errno) << "Second fork failed";
         }
     }
 
@@ -71,8 +77,16 @@ become_daemon ()
     {
         if (open("/dev/null", O_RDONLY) < 0)
         {
-            gu_throw_error(errno) << "Unable to open /dev/null for fd " << fd;
+            gu_throw_system_error(errno)
+                << "Unable to open /dev/null for fd " << fd;
         }
+    }
+
+    char* wd(static_cast<char*>(::malloc(PATH_MAX)));
+    if (wd)
+    {
+        log_info << "Currend WD: " << getcwd(wd, PATH_MAX);
+        ::free(wd);
     }
 }
 
@@ -84,10 +98,23 @@ main (int argc, char* argv[])
 
     log_info << "Read config: " <<  config << std::endl;
 
-    if (config.daemon()) become_daemon();
+    if (config.daemon()) become_daemon(config.workdir());
 
     try
     {
+        /* Ignore SIGPIPE which could be raised when cluster connections are
+           closed abruptly. */
+        struct sigaction isa;
+        memset (&isa, 0, sizeof(isa));
+        isa.sa_handler = SIG_IGN;
+
+        if (sigaction (SIGPIPE, &isa, NULL))
+        {
+            gu_throw_system_error(errno)
+                << "Falied to install signal handler for signal "
+                << "SIGPIPE";
+        }
+
         RecvLoop loop (config);
         return 0;
     }

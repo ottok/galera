@@ -14,13 +14,14 @@ include(CheckCXXCompilerFlag)
 include(CheckLibraryExists)
 
 include_directories(
-  ${CMAKE_SOURCE_DIR}
-  ${CMAKE_SOURCE_DIR}/common
-  ${CMAKE_SOURCE_DIR}/galerautils/src
-  ${CMAKE_SOURCE_DIR}/gcomm/src
-  ${CMAKE_SOURCE_DIR}/gcache/src
-  ${CMAKE_SOURCE_DIR}/gcs/src
-  ${CMAKE_SOURCE_DIR}/wsrep/src
+  ${PROJECT_SOURCE_DIR}
+  ${PROJECT_SOURCE_DIR}/common
+  ${PROJECT_SOURCE_DIR}/galera/src
+  ${PROJECT_SOURCE_DIR}/galerautils/src
+  ${PROJECT_SOURCE_DIR}/gcache/src
+  ${PROJECT_SOURCE_DIR}/gcomm/src
+  ${PROJECT_SOURCE_DIR}/gcs/src
+  ${PROJECT_SOURCE_DIR}/wsrep/src
   )
 
 # Options to control compiler options and error behavior.
@@ -72,6 +73,7 @@ endif()
 # Source compiler/OS settings first as it sets used C/C++ standards,
 # common compiler flags and include/link paths.
 include(cmake/compiler.cmake)
+include(cmake/alignment.cmake)
 include(cmake/os.cmake)
 # Instrumentation.
 include(cmake/asan.cmake)
@@ -83,6 +85,7 @@ include(cmake/common.cmake)
 include(cmake/ssl.cmake)
 include(cmake/asio.cmake)
 include(cmake/array.cmake)
+include(cmake/custom_boost.cmake)
 include(cmake/boost.cmake)
 include(cmake/crc32c.cmake)
 include(cmake/endian.cmake)
@@ -108,11 +111,11 @@ add_subdirectory(wsrep/tests)
 
 if (NOT ${CMAKE_SYSTEM_NAME} MATCHES ".*BSD")
   install(FILES
-    ${CMAKE_SOURCE_DIR}/AUTHORS
-    ${CMAKE_SOURCE_DIR}/COPYING
-    ${CMAKE_SOURCE_DIR}/README
+    ${PROJECT_SOURCE_DIR}/AUTHORS
+    ${PROJECT_SOURCE_DIR}/COPYING
+    ${PROJECT_SOURCE_DIR}/README
     DESTINATION doc)
-  install(FILES ${CMAKE_SOURCE_DIR}/asio/LICENSE_1_0.txt
+  install(FILES ${PROJECT_SOURCE_DIR}/asio/LICENSE_1_0.txt
     DESTINATION doc
     RENAME LICENSE.asio)
 endif()

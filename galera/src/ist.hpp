@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2011-2017 Codership Oy <info@codership.com>
+// Copyright (C) 2011-2021 Codership Oy <info@codership.com>
 //
 
 
@@ -29,6 +29,15 @@ namespace galera
         void register_params(gu::Config& conf);
 
 
+        struct Result
+        {
+            int error;
+            std::string error_str;
+            Result(int error_arg, const std::string& error_str_arg)
+                : error{error_arg}
+                , error_str{error_str_arg}
+            { }
+        };
         // IST event handler interface
         class EventHandler
         {
@@ -40,7 +49,7 @@ namespace galera
             virtual void ist_cc(const gcs_action&, bool must_apply,
                                 bool preload) = 0;
             // Report IST end
-            virtual void ist_end(int error) = 0;
+            virtual void ist_end(const Result&) = 0;
         protected:
             virtual ~EventHandler() {}
         };
@@ -53,7 +62,8 @@ namespace galera
 
             Receiver(gu::Config& conf, gcache::GCache&,
                      TrxHandleSlave::Pool& slave_pool,
-                     EventHandler&, const char* addr);
+                     EventHandler&, const char* addr,
+                     gu::Progress<wsrep_seqno_t>::Callback* callback);
             ~Receiver();
 
             std::string   prepare(wsrep_seqno_t       first_seqno,
@@ -80,6 +90,7 @@ namespace galera
             std::shared_ptr<gu::AsioAcceptor>             acceptor_;
             gu::Mutex                                     mutex_;
             gu::Cond                                      cond_;
+            gu::Progress<wsrep_seqno_t>::Callback*        progress_cb_;
 
             wsrep_seqno_t         first_seqno_;
             wsrep_seqno_t         last_seqno_;

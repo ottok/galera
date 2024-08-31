@@ -104,7 +104,7 @@ gu::AsioUdpSocket::resolve_and_open(const gu::URI& uri)
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "error opening datagram socket" << uri;
     }
 }
@@ -117,7 +117,7 @@ void gu::AsioUdpSocket::open(const gu::URI& uri)
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "error opening datagram socket" << uri;
     }
 }
@@ -150,7 +150,7 @@ void gu::AsioUdpSocket::connect(const gu::URI& uri)
 
         socket_.set_option(asio::ip::udp::socket::reuse_address(true));
         socket_.set_option(asio::ip::udp::socket::linger(true, 1));
-#if ASIO_VERSION < 101600
+#if ASIO_VERSION < 101400
         asio::ip::udp::socket::non_blocking_io non_blocking(true);
         socket_.io_control(non_blocking);
 #else
@@ -185,7 +185,7 @@ void gu::AsioUdpSocket::connect(const gu::URI& uri)
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "Failed to connect UDP socket: " << e.what();
     }
 }
@@ -201,7 +201,7 @@ void gu::AsioUdpSocket::write(
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value())
+    gu_throw_system_error(e.code().value())
         << "Failed to write UDP socket: " << e.what();
 }
 
@@ -221,7 +221,7 @@ void gu::AsioUdpSocket::send_to(
     }
     catch (const asio::system_error& e)
     {
-        gu_throw_error(e.code().value())
+        gu_throw_system_error(e.code().value())
             << "Failed to send datagram to "
             << target_endpoint << ": " << e.what();
     }

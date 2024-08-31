@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2020 Codership Oy <info@codership.com>
+// Copyright (C) 2020-2024 Codership Oy <info@codership.com>
 //
 
 #define GU_ASIO_IMPL
@@ -21,6 +21,20 @@
 
 #include <boost/bind.hpp>
 
+static bool is_isolated()
+{
+    const auto mode
+        = gu::gu_asio_node_isolation_mode.load(std::memory_order_relaxed);
+    switch (mode)
+    {
+    case WSREP_NODE_ISOLATION_NOT_ISOLATED: return false;
+    case WSREP_NODE_ISOLATION_ISOLATED: return true;
+    case WSREP_NODE_ISOLATION_FORCE_DISCONNECT:
+        gu_throw_fatal << "Network reactor termination was requested by "
+                          "WSREP_NODE_ISOLATION_FORCE_DISCONNECT";
+    }
+    return true; /* to keep compiler happy */
+}
 
 gu::AsioStreamReact::AsioStreamReact(
     AsioIoService& io_service,
@@ -33,6 +47,7 @@ gu::AsioStreamReact::AsioStreamReact(
     , local_addr_()
     , remote_addr_()
     , connected_()
+    , handshake_complete_()
     , non_blocking_(false)
     , in_progress_()
     , read_context_()
@@ -42,46 +57,60 @@ gu::AsioStreamReact::AsioStreamReact(
 gu::AsioStreamReact::~AsioStreamReact()
 {
     shutdown();
+    close();
 }
 
-void gu::AsioStreamReact::open(const gu::URI& uri)
+void gu::AsioStreamReact::open(const gu::URI& uri) try
 {
-    try
-    {
-        auto resolve_result(resolve_tcp(io_service_.impl().native(), uri));
-        socket_.open(resolve_result->endpoint().protocol());
-        set_fd_options(socket_);
-    }
-    catch (const asio::system_error& e)
-    {
-        gu_throw_error(e.code().value())
-            << "error opening stream socket " << uri;
-    }
+    auto resolve_result(resolve_tcp(io_service_.impl().native(), uri));
+    socket_.open(resolve_result->endpoint().protocol());
+    set_fd_options(socket_);
+}
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value())
+        << "error opening stream socket " << uri;
 }
 
-bool gu::AsioStreamReact::is_open() const
+bool gu::AsioStreamReact::is_open() const try
 {
     return socket_.is_open();
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value())
+        << "error checking if socket is open ";
+    return false;
+}
+
 
 void gu::AsioStreamReact::close() try
 {
     GU_ASIO_DEBUG(debug_print() << " AsioStreamReact::close");
+    if (not is_open())
+    {
+        GU_ASIO_DEBUG(debug_print() << "Socket not open on close");
+    }
     socket_.close();
+}
+// Catch all the possible exceptions here, not only asio ones.
+catch (const std::exception& e)
+{
+    log_info << "Closing socket failed: " << e.what();
+}
+
+void gu::AsioStreamReact::bind(const gu::AsioIpAddress& addr) try
+{
+    ::bind(socket_, addr);
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to close socket: " << e.what();
-}
-
-void gu::AsioStreamReact::bind(const gu::AsioIpAddress& addr)
-{
-    ::bind(socket_, addr);
+    gu_throw_system_error(e.code().value()) << "error in binding";
 }
 
 void gu::AsioStreamReact::async_connect(
     const gu::URI& uri,
-    const std::shared_ptr<AsioSocketHandler>& handler)
+    const std::shared_ptr<AsioSocketHandler>& handler) try
 {
     GU_ASIO_DEBUG(debug_print() << " AsioStreamReact::connect: " << uri);
     auto resolve_result(resolve_tcp(io_service_.impl().native(), uri));
@@ -96,6 +125,11 @@ void gu::AsioStreamReact::async_connect(
                                       handler,
                                       asio::placeholders::error));
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error connecting ";
+}
+
 
 void gu::AsioStreamReact::async_write(
     const std::array<AsioConstBuffer, 2>& bufs,
@@ -107,13 +141,15 @@ void gu::AsioStreamReact::async_write(
     {
         gu_throw_error(EBUSY) << "Trying to write into busy socket";
     }
-
+    if (not handshake_complete_) {
+        gu_throw_error(EBUSY) << "Handshake in progress";
+    }
     write_context_ = WriteContext(bufs);
     start_async_write(&AsioStreamReact::write_handler, handler);
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Async write failed '"
+    gu_throw_system_error(e.code().value()) << "Async write failed '"
                                      << e.what();
 }
 
@@ -124,12 +160,16 @@ void gu::AsioStreamReact::async_read(
     GU_ASIO_DEBUG(debug_print() << " AsioStreamReact::async_read: buf pointer: "
                   << buf.data() << " buf size: " << buf.size());
     assert(not read_context_.buf().data());
+    if (not handshake_complete_) {
+        gu_throw_error(EBUSY) << "Handshake in progress";
+    }
+    assert(handshake_complete_);
     read_context_ = ReadContext(buf);
     start_async_read(&AsioStreamReact::read_handler, handler);
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Async read failed '"
+    gu_throw_system_error(e.code().value()) << "Async read failed '"
                                      << e.what();
 }
 
@@ -138,7 +178,7 @@ static void throw_sync_op_error(const gu::AsioStreamEngine& engine,
 {
     auto last_error(engine.last_error());
     if (last_error.is_system())
-        gu_throw_error(last_error.value()) << prefix
+        gu_throw_system_error(last_error.value()) << prefix
                                            << ": " << last_error.message();
     else
         gu_throw_error(EPROTO) << prefix
@@ -175,7 +215,7 @@ void gu::AsioStreamReact::connect(const gu::URI& uri) try
 }
 catch (asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to connect '"
+    gu_throw_system_error(e.code().value()) << "Failed to connect '"
                                      << uri << "': " << e.what();
 }
 
@@ -202,7 +242,7 @@ size_t gu::AsioStreamReact::write(const AsioConstBuffer& buf) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to write: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to write: " << e.what();
 }
 
 size_t gu::AsioStreamReact::read(const AsioMutableBuffer& buf) try
@@ -237,7 +277,7 @@ size_t gu::AsioStreamReact::read(const AsioMutableBuffer& buf) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to read: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to read: " << e.what();
 }
 
 std::string gu::AsioStreamReact::local_addr() const
@@ -250,43 +290,99 @@ std::string gu::AsioStreamReact::remote_addr() const
     return remote_addr_;
 }
 
-void gu::AsioStreamReact::set_receive_buffer_size(size_t size)
+void gu::AsioStreamReact::set_receive_buffer_size(size_t size) try
 {
     assert(not connected_);
     ::set_receive_buffer_size(socket_, size);
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error setting receive buffer size";
+}
 
-size_t gu::AsioStreamReact::get_receive_buffer_size()
+size_t gu::AsioStreamReact::get_receive_buffer_size() try
 {
     return ::get_receive_buffer_size(socket_);
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error getting receive buffer size ";
+}
 
-void gu::AsioStreamReact::set_send_buffer_size(size_t size)
+void gu::AsioStreamReact::set_send_buffer_size(size_t size) try
 {
     assert(not connected_);
     ::set_send_buffer_size(socket_, size);
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error setting send buffer size";
+}
 
-size_t gu::AsioStreamReact::get_send_buffer_size()
+size_t gu::AsioStreamReact::get_send_buffer_size() try
 {
     return ::get_send_buffer_size(socket_);
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error getting send buffer size";
+}
 
-struct tcp_info gu::AsioStreamReact::get_tcp_info()
+struct tcp_info gu::AsioStreamReact::get_tcp_info() try
 {
     return ::get_tcp_info(socket_);
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error getting TCP info";
+}
 
+
+void gu::AsioStreamReact::complete_client_handshake(
+    const std::shared_ptr<AsioSocketHandler>& handler,
+    AsioStreamEngine::op_status result) try
+{
+    GU_ASIO_DEBUG(debug_print() << " complete_client_handshake " << result);
+    switch (result)
+    {
+    case AsioStreamEngine::success:
+        handshake_complete_ = true;
+        handler->connect_handler(*this, AsioErrorCode());
+        break;
+    case AsioStreamEngine::want_read:
+        start_async_read(&AsioStreamReact::client_handshake_handler, handler);
+        break;
+    case AsioStreamEngine::want_write:
+        start_async_write(&AsioStreamReact::client_handshake_handler, handler);
+        break;
+    case AsioStreamEngine::eof:
+        handler->connect_handler(*this,
+                                 AsioErrorCode(asio::error::misc_errors::eof,
+                                               gu_asio_misc_category));
+        break;
+    case AsioStreamEngine::error:
+        handler->connect_handler(*this, engine_->last_error());
+        break;
+    default:
+        handler->connect_handler(*this, AsioErrorCode(EPROTO));
+        break;
+        assert(0);
+    }
+}
+catch (const asio::system_error& e)
+{
+    handler->connect_handler(*this, AsioErrorCode(e.code().value()));
+}
 
 void gu::AsioStreamReact::connect_handler(
     const std::shared_ptr<AsioSocketHandler>& handler,
-    const asio::error_code& ec)
+    const asio::error_code& ec) try
 {
     GU_ASIO_DEBUG(debug_print() << " AsioStreamReact::connect_handler: " << ec);
     if (ec)
     {
         handler->connect_handler(*this, AsioErrorCode(ec.value(), ec.category()));
-        socket_.close();
+        close();
         return;
     }
 
@@ -296,36 +392,28 @@ void gu::AsioStreamReact::connect_handler(
     GU_ASIO_DEBUG(debug_print()
                   << " AsioStreamReact::connect_handler: init handshake");
     auto result(engine_->client_handshake());
-    switch (result)
-    {
-    case AsioStreamEngine::success:
-        handler->connect_handler(
-            *this, AsioErrorCode(ec.value(), ec.category()));
-        break;
-    case AsioStreamEngine::want_read:
-        start_async_read(&AsioStreamReact::client_handshake_handler, handler);
-        break;
-    case AsioStreamEngine::want_write:
-        start_async_write(&AsioStreamReact::client_handshake_handler, handler);
-        break;
-    case AsioStreamEngine::eof:
-        handler->connect_handler(*this,
-                                 AsioErrorCode(asio::error::misc_errors::eof,
-                                               gu_asio_misc_category));
-        break;
-    case AsioStreamEngine::error:
-        handler->connect_handler(*this, engine_->last_error());
-        break;
-    default:
-        handler->connect_handler(*this, AsioErrorCode(EPROTO));
-        break;
-        assert(0);
-    }
+    // Perform wait to complete IO operation.
+    socket_.async_wait(
+        socket_.wait_write,
+        [handler, result, this](const asio::error_code& ec)
+        {
+            if (ec)
+            {
+                handler->connect_handler(*this, AsioErrorCode(ec.value(), ec.category()));
+                close();
+                return;
+            }
+            complete_client_handshake(handler, result);
+        });
+}
+catch (const asio::system_error& e)
+{
+    handler->connect_handler(*this, AsioErrorCode(e.code().value()));
 }
 
 void gu::AsioStreamReact::client_handshake_handler(
     const std::shared_ptr<AsioSocketHandler>& handler,
-    const asio::error_code& ec)
+    const asio::error_code& ec) try
 {
     // During handshake there is only read or write in progress
     // at the time. Therefore safe to clear both flags.
@@ -335,9 +423,16 @@ void gu::AsioStreamReact::client_handshake_handler(
     {
         handler->connect_handler(
             *this, AsioErrorCode(ec.value(), ec.category()));
-        socket_.close();
+        close();
         return;
     }
+
+    if (is_isolated())
+    {
+        handle_isolation_error(handler);
+        return;
+    }
+
     auto result(engine_->client_handshake());
     GU_ASIO_DEBUG(debug_print()
                   << "AsioStreamReact::client_handshake_handler: result from engine: "
@@ -345,6 +440,7 @@ void gu::AsioStreamReact::client_handshake_handler(
     switch (result)
     {
     case AsioStreamEngine::success:
+        handshake_complete_ = true;
         handler->connect_handler(
             *this, AsioErrorCode(ec.value(), ec.category()));
         break;
@@ -368,63 +464,80 @@ void gu::AsioStreamReact::client_handshake_handler(
         break;
     }
 }
+catch (const asio::system_error& e)
+{
+    handler->connect_handler(*this, AsioErrorCode(e.code().value()));
+}
+
+void gu::AsioStreamReact::complete_server_handshake(
+    const std::shared_ptr<AsioSocketHandler>& handler,
+    AsioStreamEngine::op_status result) try
+{
+    GU_ASIO_DEBUG(debug_print() << "AsioStreamReact::server_handshake_handler: "
+                  << "result from engine: " << result);
+    switch (result)
+    {
+    case AsioStreamEngine::success:
+        handshake_complete_ = true;
+        handler->connect_handler(*this, AsioErrorCode());
+        break;
+    case AsioStreamEngine::want_read:
+        start_async_read(&AsioStreamReact::server_handshake_handler,
+                         handler);
+        break;
+    case AsioStreamEngine::want_write:
+        start_async_write(&AsioStreamReact::server_handshake_handler,
+                          handler);
+        break;
+    case AsioStreamEngine::error:
+        handler->connect_handler(*this, engine_->last_error());
+        break;
+    case AsioStreamEngine::eof:
+        handler->connect_handler(*this, AsioErrorCode::make_eof());
+        break;
+    }
+}
+catch (const asio::system_error& e)
+{
+    handler->connect_handler(*this, AsioErrorCode(e.code().value()));
+}
 
 void gu::AsioStreamReact::server_handshake_handler(
-    const std::shared_ptr<AsioAcceptor>& acceptor,
-    const std::shared_ptr<AsioAcceptorHandler>& acceptor_handler,
-    const asio::error_code& ec)
+    const std::shared_ptr<AsioSocketHandler>& handler,
+    const asio::error_code& ec) try
 {
     // During handshake there is only read or write in progress
     // at the time. Therefore safe to clear both flags.
     in_progress_ &= ~(read_in_progress | write_in_progress);
     if (ec)
     {
-        acceptor_handler->accept_handler(
-            *acceptor, shared_from_this(),
-            AsioErrorCode(ec.value(), ec.category()));
+        handler->connect_handler(*this,
+                                 AsioErrorCode(ec.value(), ec.category()));
         return;
     }
-    auto result(engine_->server_handshake());
-    GU_ASIO_DEBUG(debug_print() << "AsioStreamReact::server_handshake_handler: "
-                  << "result from engine: " << result);
-    switch (result)
-    {
-    case AsioStreamEngine::success:
-        acceptor_handler->accept_handler(*acceptor, shared_from_this(),
-                                         AsioErrorCode());
-        break;
-    case AsioStreamEngine::want_read:
-        start_async_read(&AsioStreamReact::server_handshake_handler,
-                         acceptor,
-                         acceptor_handler);
-        break;
-    case AsioStreamEngine::want_write:
-        start_async_write(&AsioStreamReact::server_handshake_handler,
-                          acceptor,
-                          acceptor_handler);
-        break;
-    case AsioStreamEngine::error:
-        log_warn << "Handshake failed: " << engine_->last_error();
-        // Fall through
-    case AsioStreamEngine::eof:
-        // Restart accepting transparently. The socket will go out of
-        // scope and will be destructed.
-        //
-        // However, note that with this way of notifying the initiator
-        // of accept operation will never happen before the handshake
-        // is over. This means that there may be only one socket performing
-        // server side handshake at the time. To get around this, the
-        // actual connect/accept events must be exposed to acceptor/connector
-        // handler, forcing them to initiate handshake.
-        acceptor->async_accept(acceptor_handler);
-        break;
-    }
-}
 
+    if (is_isolated())
+    {
+        throw asio::system_error(asio::error::basic_errors::operation_aborted);
+    }
+
+    auto result = engine_->server_handshake();
+    auto self = shared_from_this();
+    // Clear possible write IO
+    in_progress_ &= write_in_progress;
+    socket_.async_wait(socket_.wait_write, [handler, result,
+                                            self](const asio::error_code& ec) {
+        self->complete_server_handshake(handler, result);
+    });
+}
+catch (const asio::system_error& e)
+{
+    handler->connect_handler(*this, AsioErrorCode(e.code().value()));
+}
 
 void gu::AsioStreamReact::read_handler(
     const std::shared_ptr<AsioSocketHandler>& handler,
-    const asio::error_code& ec)
+    const asio::error_code& ec) try
 {
     GU_ASIO_DEBUG(debug_print() << " AsioStreamReact::read_handler: " << ec);
 
@@ -435,6 +548,12 @@ void gu::AsioStreamReact::read_handler(
     {
         handle_read_handler_error(handler,
                                   AsioErrorCode(ec.value(), ec.category()));
+        return;
+    }
+
+    if (is_isolated())
+    {
+        handle_isolation_error(handler);
         return;
     }
 
@@ -484,10 +603,14 @@ void gu::AsioStreamReact::read_handler(
         break;
     }
 }
+catch (const asio::system_error& e)
+{
+    handle_read_handler_error(handler, AsioErrorCode(e.code().value()));
+}
 
 void gu::AsioStreamReact::write_handler(
     const std::shared_ptr<AsioSocketHandler>& handler,
-    const asio::error_code& ec)
+    const asio::error_code& ec) try
 {
     GU_ASIO_DEBUG(debug_print() << " AsioStreamReact::write_handler: " << ec);
     in_progress_ &= ~write_in_progress;
@@ -496,6 +619,12 @@ void gu::AsioStreamReact::write_handler(
     {
         handle_write_handler_error(handler,
                                    AsioErrorCode(ec.value(), ec.category()));
+        return;
+    }
+
+    if (is_isolated())
+    {
+        handle_isolation_error(handler);
         return;
     }
 
@@ -534,6 +663,10 @@ void gu::AsioStreamReact::write_handler(
         break;
     }
 }
+catch (const asio::system_error& e)
+{
+    handle_write_handler_error(handler, AsioErrorCode(e.code().value()));
+}
 
 
 //
@@ -569,26 +702,29 @@ void gu::AsioStreamReact::prepare_engine(bool non_blocking)
 template <typename Fn, typename ...FnArgs>
 void gu::AsioStreamReact::start_async_read(Fn fn, FnArgs... fn_args)
 {
-    if (in_progress_ & read_in_progress) return;
+    if (in_progress_ & read_in_progress)
+    {
+        return;
+    }
     set_non_blocking(true);
-    socket_.async_read_some(asio::null_buffers(),
-                            boost::bind(fn,
-                                        shared_from_this(),
-                                        fn_args...,
-                                        asio::placeholders::error));
+    socket_.async_wait(socket_.wait_read,
+                       boost::bind(fn, shared_from_this(), fn_args...,
+                                   asio::placeholders::error));
+    ;
     in_progress_ |= read_in_progress;
 }
 
 template <typename Fn, typename ...FnArgs>
 void gu::AsioStreamReact::start_async_write(Fn fn, FnArgs... fn_args)
 {
-    if (in_progress_ & write_in_progress) return;
+    if (in_progress_ & write_in_progress)
+    {
+        return;
+    }
     set_non_blocking(true);
-    socket_.async_write_some(asio::null_buffers(),
-                             boost::bind(fn,
-                                         shared_from_this(),
-                                         fn_args...,
-                                         asio::placeholders::error));
+    socket_.async_wait(socket_.wait_write,
+                       boost::bind(fn, shared_from_this(), fn_args...,
+                                   asio::placeholders::error));
     in_progress_ |= write_in_progress;
 }
 
@@ -606,7 +742,7 @@ void gu::AsioStreamReact::complete_read_op(
             read_context_.bytes_transferred()));
     if (read_completion == 0)
     {
-        auto total_transferred(read_context_.bytes_transferred());
+        std::size_t total_transferred(read_context_.bytes_transferred());
         read_context_.reset();
         handler->read_handler(*this, AsioErrorCode(), total_transferred);
     }
@@ -631,7 +767,7 @@ void gu::AsioStreamReact::complete_write_op(
     write_context_.inc_bytes_transferred(bytes_transferred);
     if (write_context_.bytes_transferred() == write_context_.buf().size())
     {
-        auto total_transferred(write_context_.bytes_transferred());
+        std::size_t total_transferred(write_context_.bytes_transferred());
         write_context_.reset();
         handler->write_handler(*this, AsioErrorCode(), total_transferred);
     }
@@ -655,7 +791,7 @@ void gu::AsioStreamReact::handle_read_handler_error(
         *this,
         ec,
         read_context_.bytes_transferred());
-    socket_.close();
+    close();
 }
 
 void gu::AsioStreamReact::handle_write_handler_error(
@@ -667,7 +803,19 @@ void gu::AsioStreamReact::handle_write_handler_error(
         *this,
         ec,
         write_context_.bytes_transferred());
-    socket_.close();
+    close();
+}
+
+void gu::AsioStreamReact::handle_isolation_error(
+    const std::shared_ptr<AsioSocketHandler>& handler)
+{
+    shutdown();
+    handler->write_handler(
+        *this,
+        AsioErrorCode(asio::error::basic_errors::operation_aborted,
+                      asio::error::get_system_category()),
+        0);
+    close();
 }
 
 void gu::AsioStreamReact::set_non_blocking(bool val)
@@ -723,7 +871,7 @@ void gu::AsioAcceptorReact::open(const gu::URI& uri) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to open acceptor: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to open acceptor: " << e.what();
 }
 
 
@@ -743,7 +891,7 @@ void gu::AsioAcceptorReact::listen(const gu::URI& uri) try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to listen: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to listen: " << e.what();
 }
 
 void gu::AsioAcceptorReact::close() try
@@ -756,29 +904,28 @@ void gu::AsioAcceptorReact::close() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to close acceptor: "
+    gu_throw_system_error(e.code().value()) << "Failed to close acceptor: "
                                      << e.what();
 }
 
 
 void gu::AsioAcceptorReact::async_accept(
-    const std::shared_ptr<AsioAcceptorHandler>& handler,
+    const std::shared_ptr<AsioAcceptorHandler>& acceptor_handler,
+    const std::shared_ptr<AsioSocketHandler>& handler,
     const std::shared_ptr<AsioStreamEngine>& engine) try
 {
     GU_ASIO_DEBUG(this << " AsioAcceptorReact::async_accept: " << listen_addr());
     auto new_socket(std::make_shared<AsioStreamReact>(
                         io_service_, scheme_, engine));
-    acceptor_.async_accept(new_socket->socket_,
-                           boost::bind(&AsioAcceptorReact::accept_handler,
-                                       shared_from_this(),
-                                       new_socket,
-                                       handler,
-                                       asio::placeholders::error));
-
+    auto self = shared_from_this();
+    acceptor_.async_accept(
+        new_socket->socket_, [self, new_socket, acceptor_handler,
+                              handler](const asio::error_code& ec)
+        { self->accept_handler(new_socket, acceptor_handler, handler, ec); });
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to accept: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to accept: " << e.what();
 }
 
 
@@ -790,6 +937,15 @@ std::shared_ptr<gu::AsioSocket> gu::AsioAcceptorReact::accept() try
     set_socket_options(socket->socket_);
     socket->prepare_engine(false);
     socket->assign_addresses();
+    std::string remote_ip = gu::unescape_addr(::escape_addr(socket->socket_.remote_endpoint().address()));
+    auto connection_allowed(gu::allowlist_value_check(WSREP_ALLOWLIST_KEY_IP, remote_ip));
+    if (connection_allowed == false)
+    {
+        log_warn << "Connection not allowed, IP not found in allowlist.";
+        throw_sync_op_error(*socket->engine_, "Connection not allowed, IP not found in allowlist.");
+        return std::shared_ptr<gu::AsioSocket>();
+    }
+
     auto result(socket->engine_->server_handshake());
     switch (result)
     {
@@ -809,7 +965,7 @@ std::shared_ptr<gu::AsioSocket> gu::AsioAcceptorReact::accept() try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value()) << "Failed to accept: " << e.what();
+    gu_throw_system_error(e.code().value()) << "Failed to accept: " << e.what();
 }
 
 std::string gu::AsioAcceptorReact::listen_addr() const try
@@ -821,7 +977,7 @@ std::string gu::AsioAcceptorReact::listen_addr() const try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value())
+    gu_throw_system_error(e.code().value())
         << "failed to read listen addr "
         << "', asio error '" << e.what() << "'";
 }
@@ -832,76 +988,89 @@ unsigned short gu::AsioAcceptorReact::listen_port() const try
 }
 catch (const asio::system_error& e)
 {
-    gu_throw_error(e.code().value())
+    gu_throw_system_error(e.code().value())
         << "failed to read listen port "
         << "', asio error '" << e.what() << "'";
 }
 
-void gu::AsioAcceptorReact::set_receive_buffer_size(size_t size)
+void gu::AsioAcceptorReact::set_receive_buffer_size(size_t size) try
 {
     assert(not listening_);
     ::set_receive_buffer_size(acceptor_, size);
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error setting receive buffer size";
+}
 
-size_t gu::AsioAcceptorReact::get_receive_buffer_size()
+
+size_t gu::AsioAcceptorReact::get_receive_buffer_size() try
 {
     return ::get_receive_buffer_size(acceptor_);
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error getting receive buffer size";
+    return 0;
+}
 
-void gu::AsioAcceptorReact::set_send_buffer_size(size_t size)
+void gu::AsioAcceptorReact::set_send_buffer_size(size_t size) try
 {
     assert(not listening_);
     ::set_send_buffer_size(acceptor_, size);
 }
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error setting send buffer size";
+}
 
-size_t gu::AsioAcceptorReact::get_send_buffer_size()
+size_t gu::AsioAcceptorReact::get_send_buffer_size() try
 {
     return ::get_send_buffer_size(acceptor_);
+}
+catch (const asio::system_error& e)
+{
+    gu_throw_system_error(e.code().value()) << "error getting send buffer size";
+    return 0;
 }
 
 void gu::AsioAcceptorReact::accept_handler(
     const std::shared_ptr<AsioStreamReact>& socket,
-    const std::shared_ptr<AsioAcceptorHandler>& handler,
-    const asio::error_code& ec)
+    const std::shared_ptr<AsioAcceptorHandler>& acceptor_handler,
+    const std::shared_ptr<AsioSocketHandler>& handler,
+    const asio::error_code& ec) try
 {
     GU_ASIO_DEBUG(this << " AsioAcceptorReact::accept_handler(): " << ec);
     if (ec)
     {
-        handler->accept_handler(
+        acceptor_handler->accept_handler(
             *this, socket, AsioErrorCode(ec.value(), ec.category()));
         return;
     }
 
     set_socket_options(socket->socket_);
     socket->set_non_blocking(true);
-    socket->connected_ = true;
     socket->prepare_engine(true);
     socket->assign_addresses();
-    auto result(socket->engine_->server_handshake());
-    switch (result)
+
+    std::string remote_ip = gu::unescape_addr(::escape_addr(socket->socket_.remote_endpoint().address()));
+    bool connection_allowed(gu::allowlist_value_check(WSREP_ALLOWLIST_KEY_IP, remote_ip));
+    if (connection_allowed == false)
     {
-    case AsioStreamEngine::success:
-        handler->accept_handler(*this, socket, AsioErrorCode());
-        break;
-    case AsioStreamEngine::want_read:
-        socket->start_async_read(&AsioStreamReact::server_handshake_handler,
-                                 shared_from_this(),
-                                 handler);
-        break;
-    case AsioStreamEngine::want_write:
-        socket->start_async_write(&AsioStreamReact::server_handshake_handler,
-                                  shared_from_this(),
-                                  handler);
-        break;
-    case AsioStreamEngine::error:
-        log_warn << "Handshake failed: "
-                 << socket->engine_->last_error();
-        // Fall through
-    case AsioStreamEngine::eof:
-        // Continue accepting transparently if socket handshake fails.
-        // From user handler point of view this connection never existed
-        // and it will go out of scope when this handler returns.
-        async_accept(handler);
-        break;
+        log_warn << "Connection not allowed, IP " <<
+            remote_ip << " not found in allowlist.";
+        acceptor_handler->accept_handler(*this, socket, AsioErrorCode::make_eof());
+        return;
     }
+
+    socket->connected_ = true;
+    // Necessary async reads/writes/waits are done within
+    // server_handshake_handler().
+    acceptor_handler->accept_handler(*this, socket, AsioErrorCode());
+    socket->server_handshake_handler(handler, ec);
+}
+catch(const asio::system_error& e)
+{
+    acceptor_handler->accept_handler(*this, socket,
+                                     AsioErrorCode(e.code().value()));
 }
