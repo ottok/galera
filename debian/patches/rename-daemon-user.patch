@@ -16,12 +16,12 @@ index 926cf57..afe379c 100644
 +++ b/garb/files/garb.service
 @@ -11,7 +11,7 @@ WantedBy=multi-user.target
  Alias=garbd.service
-
+ 
  [Service]
 -User=nobody
 +User=_galera
  ExecStart=/usr/bin/garb-systemd start
-
+ 
  # Use SIGINT because with the default SIGTERM
 diff --git a/garb/files/garb.sh b/garb/files/garb.sh
 index ad75cda..3d0de3f 100755

@@ -1,3 +1,12 @@
+galera-4 (26.4.20-1) UNRELEASED; urgency=medium
+
+  * New upstream release 26.4.20. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.20.txt
+  * Extend gbp.conf and write a README.source to document new upstream import
+  * Update debian/patches to be compatible with `gbp pq` to avoid `quilt`
+
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 30 Aug 2024 22:41:30 -0700
+
 galera-4 (26.4.19-1) unstable; urgency=medium
 
   * New upstream release 26.4.19. Includes multiple bug fixes, see
