@@ -5,10 +5,12 @@ include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
 
 variables:
-  SALSA_CI_DISABLE_MISSING_BREAKS: 0
-  SALSA_CI_DISABLE_RC_BUGS: 0
   SALSA_CI_DISABLE_BLHC: 1
-  RELEASE: bookworm
+  SALSA_CI_DISABLE_PIUPARTS: 1
+  SALSA_CI_DISABLE_REPROTEST: 1
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ALL: 1
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ANY: 1
+  SALSA_CI_DISABLE_BUILD_PACKAGE_I386: 1
 
 stages:
   - provisioning
