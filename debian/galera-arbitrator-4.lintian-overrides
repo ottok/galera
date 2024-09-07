@@ -1,3 +1,7 @@
 # garbd is intentionally not started automatically upon installation,
 # see https://github.com/codership/galera/issues/266
 galera-arbitrator-4: script-in-etc-init.d-not-registered-via-update-rc.d [etc/init.d/garb]
+# Disable Lintian error that should not be fixed in a stable release so that the
+# rest of the Lintian tests can run and report if case genuine new errors are
+# encountered
+service-file-is-not-a-file [lib/systemd/system/garbd.service]
