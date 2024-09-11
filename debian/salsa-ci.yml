@@ -1,10 +1,15 @@
-# Inlude Salsa-CI as a base
+# Inlude Salsa-CI as a base - test
 include:
   - https://salsa.debian.org/ahmedsiam/salsa-pipeline/-/raw/master/recipes/ubuntu.yml
 
 variables:
   SALSA_CI_DISABLE_BLHC: 1
   SALSA_CI_DISABLE_REPROTEST: 1
+  # These pass in Ubuntu 22.04 "Jammy", so continue testing that they don't regress
+  SALSA_CI_DISABLE_LINTIAN: 0
+  SALSA_CI_DISABLE_PIUPARTS: 0
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ALL: 0
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ANY: 0
 
 stages:
   - provisioning
