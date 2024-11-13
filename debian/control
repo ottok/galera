@@ -67,6 +67,8 @@ Breaks:
  percona-xtradb-cluster-galera-2.x,
 Replaces:
  percona-xtradb-cluster-galera-2.x,
+Pre-Depends:
+ adduser,
 Depends:
  ${misc:Depends},
  ${shlibs:Depends},
