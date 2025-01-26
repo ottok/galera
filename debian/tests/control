@@ -3,4 +3,5 @@ Tests:
 Depends:
  galera-arbitrator-4,
 Restrictions:
- allow-stderr superficial,
+ allow-stderr,
+ superficial,
