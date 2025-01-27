@@ -544,33 +544,3 @@ mariadb-10.5 and bullseye upgrade:
     RELEASE: bullseye
   # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bullseye
-
-mariadb-10.3 and buster upgrade:
-  extends: .salsa-ci-template-for-combined-upgrade-test
-  stage: upgrade package and distro
-  variables:
-    RELEASE: buster
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
-  image: debian:buster
-
-mariadb-10.1 and stretch upgrade:
-  extends: .salsa-ci-template-for-combined-upgrade-test
-  stage: upgrade package and distro
-  variables:
-    RELEASE: stretch
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
-  image: debian:stretch
-  before_script:
-    - |
-      cat > /etc/apt/sources.list <<EOF
-      deb http://archive.debian.org/debian stretch main
-      deb http://archive.debian.org/debian-security stretch/updates main
-      EOF
-  allow_failure: true
-  # Note! Due to this additional error, for MariaDB upgrades from Stretch will
-  # fail, and unlike for 'login' and 'mount', this can't be fixed by removing
-  # Perl as it will uninstall mariadb-server-10.1 and render the upgrade test
-  # moot.
-  #    dpkg: error processing archive /tmp/apt-dpkg-install-f4ZoFN/35-rename_2.02-1_all.deb (--unpack):
-  #     trying to overwrite '/usr/bin/prename', which is also in package perl 5.24.1-3+deb9u7
-  # Root cause: https://salsa.debian.org/perl-team/modules/packages/rename/-/commit/2b4454b32c9fee3780c499ac93699ed8e22ba905
