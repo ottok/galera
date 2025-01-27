@@ -1,8 +1,17 @@
-galera-4 (26.4.20-2) UNRELEASED; urgency=medium
+galera-4 (26.4.21-1) unstable; urgency=medium
 
-  * Open new changelog entry. This will be replaced by 'gbp dch'.
+  [ Otto Kekäläinen ]
+  * New upstream release 26.4.21. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.21.txt
+  * Bump standards version to 4.7.0
 
- -- Otto Kekäläinen <otto@debian.org>  Tue, 03 Sep 2024 20:51:14 -0700
+  [ Adel Belhouane ]
+  * Create user _galera in galera-arbitrator-4 instead of galera-4
+    (Closes: #1086726)
+  * Package galera-arbitrator-4 has to depend on adduser
+  * Fix garbd's -w/WORK_DIR parameter (Closes: #1088076)
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 26 Jan 2025 18:33:42 -0800
 
 galera-4 (26.4.20-1) unstable; urgency=medium
 

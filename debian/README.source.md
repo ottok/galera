@@ -162,7 +162,7 @@ To check for new upstream releases run:
     # the '%(version)s' output is the Debian version and not upstream version!
 
 If the upstream version is not detected correctly, you can pass to `gbp dch` the
-extra parameter `--new-version=26.4.20`.
+extra parameter `--new-version=26.4.21`.
 
 If rebasing the patch queue causes merge conflicts, run `git mergetool` to
 visually resolve them. You can also browse the upstream changes on a particular
@@ -176,7 +176,7 @@ just like in `git am` managed patches.
 Remember that if you did more than just refreshed patches, you should save those
 changes in separate git commits. Remember to build the package, run autopkgtests
 and conduct other appropriate testing. For git-buildpackage the basic command is:
-    
+
       gbp buildpackage
 
 Alternatively you can use Debcraft and run git-buildpackage inside hermetic
