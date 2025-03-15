@@ -11,6 +11,9 @@ variables:
   SALSA_CI_DISABLE_BUILD_PACKAGE_ALL: 1
   SALSA_CI_DISABLE_BUILD_PACKAGE_ANY: 1
   SALSA_CI_DISABLE_BUILD_PACKAGE_I386: 1
+  # Disable Lintian until https://salsa.debian.org/salsa-ci-team/pipeline/-/merge_requests/552
+  # is merged
+  SALSA_CI_DISABLE_LINTIAN: 1
 
 stages:
   - provisioning
