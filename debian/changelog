@@ -116,7 +116,7 @@ galera-4 (26.4.9-1) unstable; urgency=medium
   [ Otto Kekäläinen ]
   * New upstream release 26.4.9. Includes multiple bug fixes, see
     https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.9.txt
-  * Restore CK_TIMEOUT_MULTIPLIER in debian rules to avoid unnecassary
+  * Restore CK_TIMEOUT_MULTIPLIER in debian rules to avoid unnecessary
     test failures due to slow builders
 
   [ Andreas Beckmann ]
@@ -397,7 +397,7 @@ galera-3 (25.3.13-1) unstable; urgency=low
 galera-3 (25.3.12-3) unstable; urgency=low
 
   * Update patches with proper DEP-3 compliant headers
-  * Add patch to fix build error after SSLv3 deprication (Closes: #804336)
+  * Add patch to fix build error after SSLv3 deprecation (Closes: #804336)
 
  -- Otto Kekäläinen <otto@seravo.fi>  Fri, 13 Nov 2015 15:41:29 +0200
 
