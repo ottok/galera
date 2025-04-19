@@ -2,9 +2,9 @@ From: Faustin Lammler <faustin@fala.red>
 Date: Mon, 16 Jan 2023 16:09:15 +0100
 Subject: Running daemon under nobody user is not recommended.
 
-Forwarded: https://github.com/codership/galera/pull/633
+See: https://github.com/systemd/systemd/blob/v246/NEWS#L106-L113
 
- See: https://github.com/systemd/systemd/blob/v246/NEWS#L106-L113
+Forwarded: https://github.com/codership/galera/pull/633
 ---
  garb/files/garb.service | 2 +-
  garb/files/garb.sh      | 4 ++--

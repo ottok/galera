@@ -3,7 +3,7 @@ Date: Fri, 15 Sep 2023 12:30:58 +1000
 Subject: Reduce galera.cache size test for Salsa
 
 Origin: https://salsa.debian.org/mariadb-team/galera-4/-/merge_requests/13
-Forwarded: https://github.com/codership/galera/pull/588
+Forwarded: https://github.com/codership/galera/issues/558#issuecomment-1741463038
 ---
  galera/tests/defaults_check.cpp | 6 +++---
  1 file changed, 3 insertions(+), 3 deletions(-)

@@ -2,33 +2,9 @@ From: Adel Belhouane <bugs.a.b@free.fr>
 Date: Sun, 26 Jan 2025 18:34:23 -0800
 Subject: Fix garbd's -w / WORK_DIR parameter (Closes: #1088076)
 
-Forwarded: https://github.com/codership/galera/issues/672
-Last-Update: 2025-01-26
+This can be dropped once upstream publishes
+https://github.com/codership/galera/commit/6739948b871317c4c01f4ee054b24b663b0848f4
 
-    The -w parameter (typically enabled from /etc/default/garb with the
-    WORK_DIR= variable) allows to save the gvwstate.dat file with cluster
-    information elsewhere than non-writable / .
-
-    It appears a mandatory semicolon to separate the internal parameters
-    configuration string was somehow lost in garb/garb_config.cpp during two
-    possibly conflicting commits in upstream's repository:
-
-      Add command line option to specify desired working directory where
-
-    https://github.com/codership/galera/commit/29d906e6239e0a4111214a8bf7f0779308f479f8
-
-    and:
-
-    Fix renaming of fc_master_slave to fc_single_primary. In particular don't
-
-      https://github.com/codership/galera/commit/b3c498328b699c733e5c881fcc66a6f721ac674d
-
-    causing a syntax error when the resulting internal parameter base_dir gets
-    used:
-
-    FATAL: Exception in creating receive loop: More than one value for key 'gcs.fc_single_primary' at ' gcs.fc_single_primary=yes base_dir=/tmp' in parameter list.
-
-    Restore the mandatory missing semicolon to fix this issue.
 ---
  garb/garb_config.cpp | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
