@@ -1,3 +1,13 @@
+galera-4 (26.4.22-1) unstable; urgency=medium
+
+  * New upstream release 26.4.21. Includes multiple bug fixes, see
+    https://github.com/codership/documentation/blob/master/release-notes/release-notes-galera-26.4.22.txt
+  * Bump debhelper from old 12 to 13
+  * Make file installation compatible with Debhelper 13
+  * Bump standards version to 4.7.2
+
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 25 Apr 2025 00:01:33 -0700
+
 galera-4 (26.4.21-1) unstable; urgency=medium
 
   [ Otto Kekäläinen ]
