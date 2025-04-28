@@ -6,8 +6,19 @@ include:
 # Override Salsa CI defaults with Galera specific variations
 variables:
   BUILT_PACKAGES: "galera-4 galera-arbitrator-4"
-  SALSA_CI_DISABLE_MISSING_BREAKS: 0
   SALSA_CI_DISABLE_RC_BUGS: 0
+  # Enable more architectures
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ARMEL: 0
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ARMHF: 0
+  SALSA_CI_DISABLE_BUILD_PACKAGE_ARM64: 0
+  # Enable cross-builds
+  SALSA_CI_DISABLE_CROSSBUILD_ARM64: 0
+  # This will always fail as long as tests are superficial:
+  #SALSA_CI_AUTOPKGTEST_ALLOWED_EXIT_STATUS: 0
+  SALSA_CI_DISABLE_BUILD_PACKAGE_TWICE: 0
+  SALSA_CI_ENABLE_ATOMIC_REPROTEST: 0
+  SALSA_CI_ENABLE_BUILD_PACKAGE_PROFILES: 1
+  BUILD_PROFILES: nocheck,nodoc
 
 stages:
   - provisioning
@@ -106,23 +117,25 @@ build armhf:
   rules:
     - if: $CI_PROJECT_ROOT_NAMESPACE  == "mariadb-team"
 
+# Cross-builds
+
+# Customize stage to diverge from Salsa CI 'test'
 test-crossbuild-arm64:
   stage: build
-  # Cross-builds allowed to fail by default in Salsa-CI
 
+# Custom cross-build architecture not in Salsa CI
 test-crossbuild-armhf:
   stage: build
   extends: .test-crossbuild-package-arm64
   variables:
     HOST_ARCH: armhf
-  allow_failure: true  # Cross-builds seem to fail frequently due to unclear reasons
 
+# Custom cross-build architecture not in Salsa CI
 test-crossbuild-armel:
   stage: build
   extends: .test-crossbuild-package-arm64
   variables:
     HOST_ARCH: armel
-  allow_failure: true  # Cross-builds seem to fail frequently due to unclear reasons
 
 # Define snippets used to construct jobs
 
