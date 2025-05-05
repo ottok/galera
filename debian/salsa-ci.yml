@@ -29,6 +29,9 @@ stages:
   - test  # Stage referenced by Salsa CI template reprotest stanza, so must exist
   - upgrade package
   - upgrade package and distro
+  - build (Ubuntu)
+  - upgrade package (Ubuntu)
+  - upgrade package and distro (Ubuntu)
   - publish  # Stage referenced by Salsa CI template aptly stanza, so must exist even though not used
 
 gnitpick:
@@ -129,6 +132,43 @@ build bookworm-backports:
     RELEASE: bookworm-backports
 
 # Don't build buster-backports as the archive is closed by now
+
+# Ubuntu
+
+build questing:
+  extends: .build-package
+  stage: build (Ubuntu)
+  variables:
+    VENDOR: ubuntu
+    RELEASE: questing
+    SALSA_CI_MIRROR: 'http://archive.ubuntu.com/ubuntu'
+
+build plucky:
+  extends: .build-package
+  stage: build (Ubuntu)
+  variables:
+    VENDOR: ubuntu
+    RELEASE: plucky
+    SALSA_CI_MIRROR: 'http://archive.ubuntu.com/ubuntu'
+
+build noble:
+  extends: .build-package
+  stage: build (Ubuntu)
+  variables:
+    VENDOR: ubuntu
+    RELEASE: noble
+    SALSA_CI_MIRROR: 'http://archive.ubuntu.com/ubuntu'
+
+build jammy:
+  extends: .build-package
+  stage: build (Ubuntu)
+  variables:
+    VENDOR: ubuntu
+    RELEASE: jammy
+    SALSA_CI_MIRROR: 'http://archive.ubuntu.com/ubuntu'
+
+# Ubuntu Focal too old for debhelper-compat (= 13)
+
 # Define snippets used to construct jobs
 
 .test-prepare-container: &test-prepare-container |
@@ -465,7 +505,7 @@ build bookworm-backports:
     # Start with regular upgrade (mysql-common and mariadb-common upgrade)
     # Avoid `-qq` in simulate, as on errors it would not show any context info
     - apt-get upgrade -q --simulate
-    - apt-get upgrade -qq --yes
+    - apt-get upgrade -q --yes
     # Extra fix needed in upgrades from Bullseye or older
     - test -f /bin/grep || cp -av /usr/bin/grep /bin/
     # Force downgrade of 'adduser' to a version compatible with Perl to avoid failing on:
@@ -488,7 +528,7 @@ build bookworm-backports:
     # Full upgrade should include removing old versions
     # Avoid `-qq` in simulate, as on errors it would not show any context info
     - apt-get full-upgrade -q --simulate
-    - apt-get full-upgrade -qq --yes
+    - apt-get full-upgrade -q --yes
     - *test-verify-final
 
 # In addition to Salsa CI, also run these fully Galera specific build jobs
@@ -498,6 +538,62 @@ galera-4 upgrade:
   # Already on sid, so despite template name won't upgrade the distro
 
 # Galera-3 upgrade in Sid cannot be tested since it was removed in July 2024
+
+galera-4 upgrade in questing:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package (Ubuntu)
+  needs:
+    - job: build questing
+  variables:
+    RELEASE: questing
+  image: ubuntu:questing
+  # override steps to not enable sid
+  script:
+    - *test-prepare-container
+    - *test-install-all
+    - *test-upgrade-all
+
+galera-4 upgrade in plucky:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package (Ubuntu)
+  needs:
+    - job: build plucky
+  variables:
+    RELEASE: plucky
+  image: ubuntu:plucky
+  # override steps to not enable sid
+  script:
+    - *test-prepare-container
+    - *test-install-all
+    - *test-upgrade-all
+
+galera-4 upgrade in noble:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package (Ubuntu)
+  needs:
+    - job: build noble
+  variables:
+    RELEASE: noble
+  image: ubuntu:noble
+  # override steps to not enable sid
+  script:
+    - *test-prepare-container
+    - *test-install-all
+    - *test-upgrade-all
+
+galera-4 upgrade in jammy:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package (Ubuntu)
+  needs:
+    - job: build jammy
+  variables:
+    RELEASE: jammy
+  image: ubuntu:jammy
+  # override steps to not enable sid
+  script:
+    - *test-prepare-container
+    - *test-install-all
+    - *test-upgrade-all
 
 galera-4 with trixie-backports upgrade:
   extends: .salsa-ci-template-for-package-and-distro-upgrade-test
@@ -540,6 +636,46 @@ galera-4 and bullseye upgrade:
   stage: upgrade package and distro
   image: debian:bullseye
 
+galera-4 and questing upgrade:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package and distro (Ubuntu)
+  variables:
+    RELEASE: questing
+  # Seems the RELEASE is not evaluated in template, so define image explicitly
+  image: ubuntu:questing
+
+galera-4 and plucky upgrade:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package and distro (Ubuntu)
+  variables:
+    RELEASE: plucky
+  # Seems the RELEASE is not evaluated in template, so define image explicitly
+  image: ubuntu:plucky
+
+galera-4 and noble upgrade:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package and distro (Ubuntu)
+  variables:
+    RELEASE: noble
+  # Seems the RELEASE is not evaluated in template, so define image explicitly
+  image: ubuntu:noble
+
+galera-4 and jammy upgrade:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package and distro (Ubuntu)
+  variables:
+    RELEASE: jammy
+  # Seems the RELEASE is not evaluated in template, so define image explicitly
+  image: ubuntu:jammy
+
+galera-4 and focal upgrade:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package and distro (Ubuntu)
+  variables:
+    RELEASE: focal
+  # Seems the RELEASE is not evaluated in template, so define image explicitly
+  image: ubuntu:focal
+
 mariadb upgrade:
   extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
   # Already on sid, so despite template name won't upgrade the distro
@@ -567,3 +703,27 @@ mariadb-10.5 and bullseye upgrade:
     RELEASE: bullseye
   # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bullseye
+
+mariadb 11.4 and plucky upgrade:
+  extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
+  stage: upgrade package and distro (Ubuntu)
+  variables:
+    RELEASE: plucky
+  # Seems the RELEASE is not evaluated in template, so define image explicitly
+  image: ubuntu:plucky
+
+mariadb 10.11 and noble upgrade:
+  extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
+  stage: upgrade package and distro (Ubuntu)
+  variables:
+    RELEASE: noble
+  # Seems the RELEASE is not evaluated in template, so define image explicitly
+  image: ubuntu:noble
+
+mariadb-10.6 and jammy upgrade:
+  extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
+  stage: upgrade package and distro (Ubuntu)
+  variables:
+    RELEASE: jammy
+  # Seems the RELEASE is not evaluated in template, so define image explicitly
+  image: ubuntu:jammy
