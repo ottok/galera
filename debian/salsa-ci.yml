@@ -84,22 +84,6 @@ packaging-fix-checks:
     variables:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
 
-build bookworm-backports:
-  extends: .build-package
-  variables:
-    RELEASE: bookworm-backports
-    # Extra variable needed until salsa-ci-team/pipeline#349 is fixed
-    SALSA_CI_IMAGES_BASE: ${SALSA_CI_IMAGES}/base:bookworm-backports
-
-build bullseye-backports:
-  extends: .build-package
-  variables:
-    RELEASE: bullseye-backports
-    # Extra variable needed until salsa-ci-team/pipeline#349 is fixed
-    SALSA_CI_IMAGES_BASE: ${SALSA_CI_IMAGES}/base:bullseye-backports
-
-# Since buster-backports was closed, building for it no longer makes sense
-
 # Additional builds on arm64 only when in main project as only it has runners
 # available in https://salsa.debian.org/groups/mariadb-team/-/runners
 build arm64:
@@ -137,6 +121,19 @@ test-crossbuild-armel:
   variables:
     HOST_ARCH: armel
 
+# Backports
+
+build bookworm-backports:
+  extends: .build-package
+  variables:
+    RELEASE: bookworm-backports
+
+build bullseye-backports:
+  extends: .build-package
+  variables:
+    RELEASE: bullseye-backports
+
+# Don't build buster-backports as the archive is closed by now
 # Define snippets used to construct jobs
 
 .test-prepare-container: &test-prepare-container |
@@ -340,23 +337,26 @@ test-crossbuild-armel:
   echo "deb [trusted=yes] file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
   apt-get update -q
 
+# Install packages before doing upgrade tests
 .test-install-all: &test-install-all
-  - apt-get install -qq --simulate ${BUILT_PACKAGES}
+  # Initial installation
   - apt-get install -qq --yes ${BUILT_PACKAGES}
-  - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
+  # List packages to show what is installed now
+  - dpkg -l | grep -iE 'maria|mysql|galera' || true
 
+# test-upgrade-all uses this
 .test-verify-final: &test-verify-final
   # Verify MariaDB is running and Galera plugin is visible
   - command -v mysql && mysql --table -e "SHOW PLUGINS" | grep -i wsrep
   - command -v mariadb && mariadb --table -e "SHOW PLUGINS" | grep -i wsrep
   - garbd --version
-  # Extra fix needed in upgrades from Bullseye or older
+  # Extra fix needed in upgrades from Bullseye or older (usrmerge related)
   - test -f /bin/grep || cp -av /usr/bin/grep /bin/
-  - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
+  # List installed packages and verify Galera from artifacts is present
+  - dpkg -l | grep -iE 'maria|mysql|galera' || true
   - >
     dpkg -l | grep galera | grep salsaci || {
-      echo "ERROR! Galera was not upgraded from artifacts"
-      find -ls -maxdepth 3
+      echo "ERROR! Galera was not upgraded as expexted to CI version"
       exit 1
     }
 
@@ -373,16 +373,11 @@ test-crossbuild-armel:
   - apt-get full-upgrade -qq --yes
   - *test-verify-final
 
-.salsa-ci-template-for-upgrade-test:
+.salsa-ci-template-for-package-and-distro-upgrade-test:
   stage: upgrade package
   needs:
     - job: build
   image: debian:${RELEASE}
-  artifacts:
-    when: always
-    name: "$CI_BUILD_NAME"
-    paths:
-      - ${WORKING_DIR}/debug
   script:
     - *test-prepare-container
     - *test-install-all
@@ -390,16 +385,17 @@ test-crossbuild-armel:
     - *test-upgrade-all
   variables:
     GIT_STRATEGY: none
-    RELEASE: sid
   except:
     variables:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
 
-.salsa-ci-template-for-combined-upgrade-test:
-  extends: .salsa-ci-template-for-upgrade-test
+.salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  variables:
+    RELEASE: sid
   script:
     - *test-prepare-container
-    # Install all Galera packages and MariaDB
+    # Install all Galera packages and MariaDB (try v4 first, fallback to v3)
     - apt-get install -q --yes galera*-4 mariadb-server || apt-get install -q --yes galera*-3 mariadb-server
     - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
     # Verify MariaDB is running and Galera plugin is visible
@@ -442,14 +438,15 @@ test-crossbuild-armel:
     - *test-verify-final
 
 # In addition to Salsa CI, also run these fully Galera specific build jobs
+
 galera-4 upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
-  stage: upgrade package
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  # Already on sid, so despite template name won't upgrade the distro
 
 # Galera-3 upgrade in Sid cannot be tested since it was removed in July 2024
 
 galera-4 with bookworm-backports upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package
   needs:
     - job: build bookworm-backports
@@ -457,6 +454,7 @@ galera-4 with bookworm-backports upgrade:
     RELEASE: bookworm
   # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bookworm
+  # override steps to not enable sid
   script:
     - *test-prepare-container
     - *test-install-all
@@ -464,7 +462,7 @@ galera-4 with bookworm-backports upgrade:
     - *test-upgrade-all
 
 galera-4 with bullseye-backports upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package
   needs:
     - job: build bullseye-backports
@@ -472,6 +470,7 @@ galera-4 with bullseye-backports upgrade:
     RELEASE: bullseye
   # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bullseye
+  # override steps to not enable sid
   script:
     - *test-prepare-container
     - *test-install-all
@@ -479,7 +478,7 @@ galera-4 with bullseye-backports upgrade:
     - *test-upgrade-all
 
 galera-4 and trixie upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: trixie
@@ -487,7 +486,7 @@ galera-4 and trixie upgrade:
   image: debian:trixie
 
 galera-4 and bookworm upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: bookworm
@@ -495,7 +494,7 @@ galera-4 and bookworm upgrade:
   image: debian:bookworm
 
 galera-4 and bullseye upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: bullseye
@@ -503,7 +502,7 @@ galera-4 and bullseye upgrade:
   image: debian:bullseye
 
 galera-3 and bullseye upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: bullseye
@@ -514,14 +513,14 @@ galera-3 and bullseye upgrade:
     - apt-get install -q --yes 'galera*-3'
     - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
     - *test-enable-sid-repos
-    # Unless the MariaDB server is installed, nothing will force galera-3 to
-    # upgrade to galera-4 and thus it needs to be induces
+    # As the MariaDB server is not installed, nothing will force galera-3 to
+    # upgrade to galera-4 and thus it needs to be requested explicitly
     - *test-enable-artifacts-repo
-    - apt-get install -q --yes 'galera*-4'
+    - apt-get install -q --yes ${BUILT_PACKAGES}
     - *test-verify-final
 
 galera-3 and buster upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: buster
@@ -532,19 +531,21 @@ galera-3 and buster upgrade:
     - apt-get install -q --yes 'galera*-3'
     - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
     - *test-enable-sid-repos
-    # Unless the MariaDB server is installed, nothing will force galera-3 to
-    # upgrade to galera-4 and thus it needs to be induces
+    # As the MariaDB server is not installed, nothing will force galera-3 to
+    # upgrade to galera-4 and thus it needs to be requested explicitly
     - *test-enable-artifacts-repo
-    - apt-get install -q --yes 'galera*-4'
+    - apt-get install -q --yes ${BUILT_PACKAGES}
     - *test-verify-final
 
 galera-3 and stretch upgrade:
-  extends: .salsa-ci-template-for-upgrade-test
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: stretch
   # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:stretch
+  # The original Stretch repository has been shut down, use the archived version
+  # instead
   before_script:
     - |
       cat > /etc/apt/sources.list <<EOF
@@ -556,18 +557,18 @@ galera-3 and stretch upgrade:
     - apt-get install -q --yes 'galera*-3'
     - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
     - *test-enable-sid-repos
-    # Unless the MariaDB server is installed, nothing will force galera-3 to
-    # upgrade to galera-4 and thus it needs to be induces
+    # As the MariaDB server is not installed, nothing will force galera-3 to
+    # upgrade to galera-4 and thus it needs to be requested explicitly
     - *test-enable-artifacts-repo
-    - apt-get install -q --yes 'galera*-4'
+    - apt-get install -q --yes ${BUILT_PACKAGES}
     - *test-verify-final
 
 mariadb upgrade:
-  extends: .salsa-ci-template-for-combined-upgrade-test
-  stage: upgrade package
+  extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
+  # Already on sid, so despite template name won't upgrade the distro
 
-mariadb 11.4 and trixie upgrade:
-  extends: .salsa-ci-template-for-combined-upgrade-test
+mariadb 11.8 and trixie upgrade:
+  extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: trixie
@@ -575,7 +576,7 @@ mariadb 11.4 and trixie upgrade:
   image: debian:trixie
 
 mariadb 10.11 and bookworm upgrade:
-  extends: .salsa-ci-template-for-combined-upgrade-test
+  extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: bookworm
@@ -583,7 +584,7 @@ mariadb 10.11 and bookworm upgrade:
   image: debian:bookworm
 
 mariadb-10.5 and bullseye upgrade:
-  extends: .salsa-ci-template-for-combined-upgrade-test
+  extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
   stage: upgrade package and distro
   variables:
     RELEASE: bullseye
