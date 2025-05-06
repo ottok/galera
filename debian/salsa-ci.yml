@@ -195,8 +195,7 @@ build bullseye-backports:
       # Install tools that may be needed to circumvent issues in the upgrade
       apt-get install -qq --yes --no-install-recommends ca-certificates curl
       # Replace any old repos with just Sid, and trust blindly as old Debian releases won't have latest Sid in their keyring
-      echo 'deb [trusted=yes] http://deb.debian.org/debian sid main' > /etc/apt/sources.list
-
+      echo 'deb http://deb.debian.org/debian sid main' > /etc/apt/sources.list
       # Attempting upgrade from Bullseye or older to Debian Sid is no longer
       # possible in April 2025, as even with all usrmerge workarounds applied
       # the util-linux upgrade is practically impossible due to versioned hard
@@ -214,7 +213,7 @@ build bullseye-backports:
       # March 2025 version:
       if grep -q -E 'bullseye|buster|stretch' /etc/os-release
       then
-        echo 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250315T025205Z sid main' > /etc/apt/sources.list
+        echo 'deb http://snapshot.debian.org/archive/debian/20250315T025205Z sid main' > /etc/apt/sources.list
       fi
       # Run update to ensure next install command uses latest apt sources
       apt-get update -q
@@ -347,7 +346,7 @@ build bullseye-backports:
   apt-get install -qq --yes apt-utils
   apt-ftparchive packages . > Packages
   apt-ftparchive release . > Release
-  echo "deb [trusted=yes] file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
+  echo "deb file:$(pwd) ./" > /etc/apt/sources.list.d/local.list
   apt-get update -q
 
 # Install packages before doing upgrade tests
