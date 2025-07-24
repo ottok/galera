@@ -17,17 +17,6 @@ stages:
   - upgrade package and distro
   - publish  # Stage referenced by Salsa-CI template aptly stanza, so must exist even though not used
 
-# Add new "before_script" section to the very first Salsa CI job to submit stats
-extract-source:
-  stage: provisioning
-  before_script:
-    - |
-      apt-get update && apt-get install -y curl
-      if [ "$CI_PROJECT_VISIBILITY" = 'public' ]; then
-        IDENTIFIERS="{\"id\":$CI_PIPELINE_ID, \"project_id\":$CI_PROJECT_ID, \"created_at\":\"$CI_PIPELINE_CREATED_AT\"}"
-        curl --connect-timeout 30 --max-time 90 -X PUT 'https://salsa-ci-dashboard-backend.onrender.com/pipelines' -H 'Content-Type: application/json' -d "$IDENTIFIERS" || true
-      fi
-
 gnitpick:
   stage: provisioning
   image: debian:sid-slim
