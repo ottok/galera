@@ -8,7 +8,7 @@ variables:
   BUILT_PACKAGES: "galera-4 galera-arbitrator-4"
   SALSA_CI_DISABLE_MISSING_BREAKS: 0
   SALSA_CI_DISABLE_RC_BUGS: 0
-  SALSA_CI_ENABLE_STATS: 1
+  SALSA_CI_ENABLE_STATS: 0
 
 stages:
   - provisioning
