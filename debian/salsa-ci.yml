@@ -495,9 +495,6 @@ galera-4 with bookworm-backports upgrade:
   stage: upgrade package
   needs:
     - job: build bookworm-backports
-  variables:
-    RELEASE: bookworm
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bookworm
   # override steps to not enable sid
   script:
@@ -511,9 +508,6 @@ galera-4 with bullseye-backports upgrade:
   stage: upgrade package
   needs:
     - job: build bullseye-backports
-  variables:
-    RELEASE: bullseye
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bullseye
   # override steps to not enable sid
   script:
@@ -525,33 +519,21 @@ galera-4 with bullseye-backports upgrade:
 galera-4 and trixie upgrade:
   extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
-  variables:
-    RELEASE: trixie
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:trixie
 
 galera-4 and bookworm upgrade:
   extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
-  variables:
-    RELEASE: bookworm
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bookworm
 
 galera-4 and bullseye upgrade:
   extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
-  variables:
-    RELEASE: bullseye
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bullseye
 
 galera-3 and bullseye upgrade:
   extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
-  variables:
-    RELEASE: bullseye
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:bullseye
   script:
     - *test-prepare-container
@@ -567,9 +549,6 @@ galera-3 and bullseye upgrade:
 galera-3 and buster upgrade:
   extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
-  variables:
-    RELEASE: buster
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:buster
   script:
     - *test-prepare-container
@@ -585,9 +564,6 @@ galera-3 and buster upgrade:
 galera-3 and stretch upgrade:
   extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package and distro
-  variables:
-    RELEASE: stretch
-  # Seems the RELEASE is not evaluated in template, so define image explicitly
   image: debian:stretch
   # The original Stretch repository has been shut down, use the archived version
   # instead
