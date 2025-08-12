@@ -1,3 +1,2 @@
 rename-daemon-user.patch
 small_gcache_size_for_salsa.patch
-fix-work-dir.patch
