@@ -13,7 +13,7 @@
 
 #include "gcs_gcache.hpp"
 
-#include <gu_config.h>
+#include <gu_config.hpp>
 #include <gu_buf.h>
 #include <gu_errno.h>
 #include <gu_uuid.hpp>
@@ -58,7 +58,7 @@ typedef struct gcs_conn gcs_conn_t;
  * @return pointer to GCS connection handle, NULL in case of failure.
  */
 extern gcs_conn_t*
-gcs_create  (gu_config_t* conf, gcache_t* cache,
+gcs_create  (gu::Config& conf, gcache_t* cache,
              gu::Progress<gcs_seqno_t>::Callback* progress_cb,
              const char* node_name, const char* inc_addr,
              int repl_proto_ver, int appl_proto_ver);
@@ -222,13 +222,17 @@ std::ostream& operator <<(std::ostream& os, const gcs_action& act);
  * @param act_in    action buffer vector (total size is passed in action)
  * @param action    action struct
  * @param scheduled whether the call was preceded by gcs_schedule()
+ * @param seq_cb    callback struct for signalling the caller once the
+ *                  replication sequence has been established
  * @return          negative error code, action size in case of success
  * @retval -EINTR:  thread was interrupted while waiting to enter the monitor
  */
 extern long gcs_replv (gcs_conn_t*          conn,
                        const struct gu_buf* act_in,
                        struct gcs_action*   action,
-                       bool                 scheduled);
+                       bool                 scheduled,
+                       const wsrep_seq_cb_t* seq_cb
+);
 
 /*! A wrapper for single buffer communication */
 static inline long gcs_repl (gcs_conn_t*        const conn,
@@ -236,7 +240,7 @@ static inline long gcs_repl (gcs_conn_t*        const conn,
                              bool               const scheduled)
 {
     struct gu_buf const buf = { action->buf, action->size };
-    return gcs_replv (conn, &buf, action, scheduled);
+    return gcs_replv (conn, &buf, action, scheduled, nullptr);
 }
 
 /*! @brief Receives an action from group.
@@ -383,9 +387,9 @@ gcs_vote (gcs_conn_t* conn, const gu::GTID& gtid, uint64_t code,
 /* GCS Configuration */
 
 /*! Registers configurable parameters with conf object
- * @return false if success, true if error happened */
-extern bool
-gcs_register_params (gu_config_t* conf);
+ *  throws exception if error happened */
+extern void
+gcs_register_params (gu::Config& conf);
 
 /*! sets the key to a given value
  *
@@ -485,6 +489,9 @@ struct gcs_stats
     int       send_q_len;     //! current send queue length
     int       send_q_len_max; //! maximum send queue length
     int       send_q_len_min; //! minimum send queue length
+    int       proto_appl;     //! application protocol level
+    int       proto_repl;     //! replicator protocol level
+    int       proto_gcs;      //! GCS protocol level
     bool      fc_active;      //! flow control is currently active
     bool      fc_requested;   //! flow control is requested by this node
 };

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2020 Codership Oy <info@codership.com>
+ * Copyright (C) 2008-2025 Codership Oy <info@codership.com>
  *
  * $Id$
  */
@@ -33,7 +33,7 @@ msg_write (gcs_recv_msg_t* msg,
     ck_assert_msg(0 == ret, "error code: %ld", ret);
     ck_assert(frg->frag != NULL);
     ck_assert_msg(frg->frag_len >= data_len,
-                  "Resulting frag_len %lu is less than required act_len %lu\n"
+                  "Resulting frag_len %zu is less than required act_len %zu\n"
                   "Refactor the test and increase buf_len.",
                   frg->frag_len, data_len);
     memcpy ((void*)frg->frag, data, data_len);
@@ -45,10 +45,10 @@ msg_write (gcs_recv_msg_t* msg,
     msg->type       = type;
 }
 
-static long
+static gcs_group_state_t
 new_component (gcs_group_t* group, const gcs_comp_msg_t* comp)
 {
-    long ret = gcs_group_handle_comp_msg (group, comp);
+    gcs_group_state_t const ret(gcs_group_handle_comp_msg (group, comp));
     // modelling real state exchange is really tedious here, just fake it
     group->state = GCS_GROUP_PRIMARY;
     return ret;
@@ -62,7 +62,6 @@ new_component (gcs_group_t* group, const gcs_comp_msg_t* comp)
 START_TEST (gcs_group_configuration)
 {
     ssize_t     ret;
-    gcs_group_t group;
     gcs_seqno_t seqno = 11;
 
     // The Action
@@ -131,8 +130,8 @@ START_TEST (gcs_group_configuration)
 
     // ready
     gu::Config cnf;
-    gcs_group_register(&cnf);
-    gcs_group_init (&group, &cnf, NULL, "my node", "my addr", 0, 0, 0);
+    gcs_group::register_params(cnf);
+    gcs_group_t group(cnf, NULL, "my node", "my addr", 0, 0, 0);
     ck_assert(!gcs_group_is_primary(&group));
     ck_assert(group.num == 0);
 
@@ -397,7 +396,6 @@ START_TEST (gcs_group_configuration)
     ret = new_component (&group, comp);
     ck_assert(ret >= 0);
     gcs_comp_msg_delete (comp);
-    gcs_group_free(&group);
 }
 END_TEST
 
@@ -411,7 +409,9 @@ test_last_applied(int const gcs_proto_ver)
     gcs_group_t& group(*gt.nodes[0]->group());
 
     // 0, 0, 0, 0
-    ck_assert(group.last_applied == 0);
+    ck_assert_msg(group.last_applied == 0,
+                  "expected last_applied = 0, got %" PRId64,
+                  group.last_applied);
     gt.deliver_last_applied (0, 11);
     // 11, 0, 0, 0
     ck_assert_msg(group.last_applied == 0,
@@ -437,37 +437,266 @@ test_last_applied(int const gcs_proto_ver)
     // 17, 16, 13, 18
     ck_assert(group.last_applied == 13); // must still be 13
 
-    // remove the lagging node
-    struct gt_node* const gn(gt.drop_node(2));
+    /*
+     * remove the lagging node
+     */
+    struct gt_node* gn(gt.drop_node(2));
     ck_assert(gn != NULL);
     delete gn;
 
     // 17, 16, 18
     // With GCS protocol 2 and above we use conservative group wide value from
     // the previous PC (13) as opposed to the minimal individual value (16)
-    gcs_seqno_t const expect1(gcs_proto_ver < 2 ? 16 : 13);
-    ck_assert_msg(group.last_applied == expect1,
+    gcs_seqno_t expect(gcs_proto_ver < 2 ? 16 : 13);
+    ck_assert_msg(group.last_applied == expect,
                   "Expected %" PRId64 ", got %" PRId64 "\n"
                   "Nodes: %ld; last_applieds: "
                   "%" PRId64 ", %" PRId64 " , %" PRId64,
-                  expect1, group.last_applied, group.num,
+                  expect, group.last_applied, group.num,
                   group.nodes[0].last_applied, group.nodes[1].last_applied,
                   group.nodes[2].last_applied);
 
     if (gcs_proto_ver >= 2)
     {
-        ck_assert(13 == group.nodes[0].last_applied);
-        ck_assert(13 == group.nodes[1].last_applied);
-        ck_assert(13 == group.nodes[2].last_applied);
+        ck_assert_msg(13 == group.nodes[0].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(13 == group.nodes[1].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(13 == group.nodes[2].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[2].last_applied);
     }
 
-    // add new node
+    /* Advance lagging node */
+    gt.deliver_last_applied (1, 17);
+    // 17, 17, 18
+    expect = (gcs_proto_ver < 2 ? 17 : 13);
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(13 == group.nodes[0].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(17 == group.nodes[1].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(13 == group.nodes[2].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[2].last_applied);
+    }
+
+    /*
+     * add a new node and sync immediately
+     */
     ck_assert(0 == gt.add_node(new gt_node(DISTANTHOST"1", gcs_proto_ver),true));
     ck_assert(0 == gt.sync_node(gt.nodes_num - 1));
-    // 17, 16, 18, 0 (v0-1) / 13, 13, 13, 13 (v2-)
+    // 17, 17, 18, 0 (v0-1) / 13, 17, 13, 0 (v2-)
     // With GCS protocol 2 and above last_applied can't go down.
-    gcs_seqno_t const expect2(gcs_proto_ver < 2 ? 0 : 13);
-    ck_assert(group.last_applied == expect2);
+    expect = (gcs_proto_ver < 2 ? 0 : 13);
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(13 == group.nodes[0].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(13 == group.nodes[1].last_applied, // back to conservative
+                      "expected 13, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(13 == group.nodes[2].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[2].last_applied);
+        ck_assert_msg(0 == group.nodes[3].last_applied,
+                      "expected 0, got %" PRId64, group.nodes[3].last_applied);
+    }
+
+    gt.deliver_last_applied (0, 18);
+    gt.deliver_last_applied (2, 19);
+    // 18, 17, 19, 0 (v0-1) / 13, 13, 13, 0 (v2-)
+    expect = (gcs_proto_ver < 2 ? 0 : 13); // still keeping conservative cut 13
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    /* remove last node to add unsynced */
+    gn = gt.drop_node(3);
+    ck_assert(gn != NULL);
+    delete gn;
+
+    expect = (gcs_proto_ver < 2 ? 17 : 13);
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    /*
+     * add a new node but don't sync yet
+     */
+    ck_assert(0 == gt.add_node(new gt_node(DISTANTHOST"2", gcs_proto_ver),true));
+    // 18, 17, 19, 0 (v0-1) / 13, 13, 13, 0 (v2-)
+    expect = (gcs_proto_ver < 2 ? 17 : 13);
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(13 == group.nodes[0].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(13 == group.nodes[1].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(13 == group.nodes[2].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[2].last_applied);
+        ck_assert_msg(0 == group.nodes[3].last_applied,
+                      "expected 0, got %" PRId64, group.nodes[3].last_applied);
+    }
+
+    /* Advance lagging node */
+    gt.deliver_last_applied (1, 18);
+    // 18, 18, 19, 0 (v0-1) / 13, 18, 13, 0 (v2-)
+    expect = (gcs_proto_ver < 2 ? 18 : 13);
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(13 == group.nodes[0].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(18 == group.nodes[1].last_applied,
+                      "expected 18, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(13 == group.nodes[2].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[2].last_applied);
+        ck_assert_msg(0 == group.nodes[3].last_applied,
+                      "expected 0, got %" PRId64, group.nodes[3].last_applied);
+    }
+
+    /* Advance non-synced node (should have no effect) */
+    gt.deliver_last_applied (3, 14);
+    // 18, 18, 19, 14 (v0-1) / 13, 18, 13, 14 (v2-)
+    expect = (gcs_proto_ver < 2 ? 18 : 13);
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(13 == group.nodes[0].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(18 == group.nodes[1].last_applied,
+                      "expected 18, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(13 == group.nodes[2].last_applied,
+                      "expected 13, got %" PRId64, group.nodes[2].last_applied);
+        ck_assert_msg(14 == group.nodes[3].last_applied,
+                      "expected 14, got %" PRId64, group.nodes[3].last_applied);
+    }
+
+    /* Advance nodes 0 and 2 - this should advance global commit cut */
+    gt.deliver_last_applied (0, 20);
+    gt.deliver_last_applied (2, 20);
+    // 20, 18, 20, 14 (v0-1) / 20, 18, 20, 14 (v2-)
+    expect = (gcs_proto_ver < 2 ? 18 : 18);
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(20 == group.nodes[0].last_applied,
+                      "expected 20, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(18 == group.nodes[1].last_applied,
+                      "expected 18, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(20 == group.nodes[2].last_applied,
+                      "expected 20, got %" PRId64, group.nodes[2].last_applied);
+        ck_assert_msg(14 == group.nodes[3].last_applied,
+                      "expected 14, got %" PRId64, group.nodes[3].last_applied);
+    }
+
+    /* Sync node 3 - this shoud have no change */
+    ck_assert(0 == gt.sync_node(gt.nodes_num - 1));
+    expect = (gcs_proto_ver < 2 ? 14 : 18); // v0-1 shall decrease commit cut
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    /* Advance nodes 0, 1, 2 - under v5 it should not advance global commit cut*/
+    gt.deliver_last_applied (0, 21);
+    gt.deliver_last_applied (1, 21);
+    gt.deliver_last_applied (2, 21);
+    // 21, 21, 21, 14
+    switch (gcs_proto_ver)
+    {
+    case 0:
+    case 1: expect = 14; break;
+    case 2:
+    case 3:
+    case 4: expect = 21; break; // codership/galera-bugs#1003:
+    case 5: expect = 18; break; // don't advance commit cut if any SYNCED node is behind
+    default: ck_assert_msg(false, "Unaccounted for gcs_proto_ver %d",
+                           gcs_proto_ver);
+    }
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(21 == group.nodes[0].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(21 == group.nodes[1].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(21 == group.nodes[2].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[2].last_applied);
+        ck_assert_msg(14 == group.nodes[3].last_applied,
+                      "expected 14, got %" PRId64, group.nodes[3].last_applied);
+    }
+
+    /* Lagging synced node advances a bit, below global commit cut */
+    gt.deliver_last_applied (3, 15);
+    // 21, 21, 21, 15
+    switch (gcs_proto_ver)
+    {
+    case 0:
+    case 1: expect = 15; break;
+    case 2:
+    case 3:
+    case 4: expect = 21; break; // codership/galera-bugs#1003
+    case 5: expect = 18; break; // don't advance commit cut if any SYNCED node is behind
+    default: ck_assert_msg(false, "Unaccounted for gcs_proto_ver %d",
+                           gcs_proto_ver);
+    }
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(21 == group.nodes[0].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(21 == group.nodes[1].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(21 == group.nodes[2].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[2].last_applied);
+        ck_assert_msg(15 == group.nodes[3].last_applied,
+                      "expected 15, got %" PRId64, group.nodes[3].last_applied);
+    }
+
+    /* Lagging synced node catches up wth global commit cut */
+    gt.deliver_last_applied (3, 22);
+    // 21, 21, 21, 22
+    expect = 21;
+    ck_assert_msg(group.last_applied == expect,
+                  "Expected %" PRId64 ", got %" PRId64 ", proto: %d\n",
+                  expect, group.last_applied, gcs_proto_ver);
+
+    if (gcs_proto_ver >= 2)
+    {
+        ck_assert_msg(21 == group.nodes[0].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[0].last_applied);
+        ck_assert_msg(21 == group.nodes[1].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[1].last_applied);
+        ck_assert_msg(21 == group.nodes[2].last_applied,
+                      "expected 21, got %" PRId64, group.nodes[2].last_applied);
+        ck_assert_msg(22 == group.nodes[3].last_applied,
+                      "expected 22, got %" PRId64, group.nodes[3].last_applied);
+    }
 }
 
 START_TEST(gcs_group_last_applied_v0)
@@ -488,16 +717,74 @@ START_TEST(gcs_group_last_applied_v2)
 }
 END_TEST
 
-START_TEST(test_gcs_group_find_donor)
+START_TEST(gcs_group_last_applied_v3)
+{
+    test_last_applied(3);
+}
+END_TEST
+
+START_TEST(gcs_group_last_applied_v4)
+{
+    test_last_applied(4);
+}
+END_TEST
+
+START_TEST(gcs_group_last_applied_v5)
+{
+    test_last_applied(5);
+}
+END_TEST
+
+// Test that setting stateless flag works
+static void
+test_stateless_flag(bool const f)
 {
     gu::Config cnf;
-    gcs_group_register(&cnf);
-    gcs_group_t group;
-    gcs_group_init(&group, &cnf, NULL, "", "", 0, 0, 0);
+    gcs_group::register_params(cnf);
+    cnf.set(GCS_STATELESS_KEY, f ? "true" : "false");
+    gcs_group_t group(cnf, NULL, "", "", 5, 11, 7);
+    ck_assert(f == group.stateless);
+
+    gcs_comp_msg_t* const msg(gcs_comp_msg_new(true, false, 0, 1, 0));
+    ck_assert(nullptr != msg);
+    int const m(gcs_comp_msg_add(msg, LOCALHOST, 0));
+    ck_assert(0 == m);
+    gcs_group_state_t const ret(new_component(&group, msg));
+    ck_assert(ret >= 0);
+
+    ck_assert(f == group.nodes[0].stateless);
+
+    gcs_comp_msg_delete(msg);
+}
+
+START_TEST(test_stateless_flag_false)
+{
+    test_stateless_flag(false);
+}
+END_TEST
+
+START_TEST(test_stateless_flag_true)
+{
+    test_stateless_flag(true);
+}
+END_TEST
+
+// Test donor selection algorithm based on
+// - smallest cached seqno (to avoid SST)
+// - segment affinity
+// - stateless flag
+static void
+test_gcs_group_find_donor(bool const a)
+{
+    gu::Config cnf;
+    gcs_group::register_params(cnf);
+    cnf.set(GCS_STATELESS_KEY, a ? "true" : "false");
+    gcs_group_t group(cnf, NULL, "", "", 0, 0, 0);
+    ck_assert(a == group.stateless);
     const char* s_group_uuid = "0d0d0d0d-0d0d-0d0d-0d0d-0d0d0d0d0d0d";
     gu_uuid_scan(s_group_uuid, strlen(s_group_uuid), &group.group_uuid);
 
-    // five nodes
+    // seven nodes
     // idx name segment  seqno
     // 0th home0 0        90
     // 1th home1 0        95
@@ -514,14 +801,18 @@ START_TEST(test_gcs_group_find_donor)
     const gcs_seqno_t seqnos[] = {90, 95, 105, 100, 90, 95, 105};
     gcs_node_t* nodes = group.nodes;
     const int joiner = 3;
+    const int arbitr = 0;
 
     for(int i = 0; i < number; i++)
     {
         uint8_t const vp(gcs_group_conf_to_vote_policy(cnf));
         char name[32];
         snprintf(name, sizeof(name), "home%d", i);
+        bool const stateless(arbitr == i && group.stateless);
         gcs_node_init(&nodes[i], NULL, name, name,
-                      "", 0, 0, 0, i > joiner ? 1 : 0);
+                      "", 0, 0, 0, i > joiner ? 1 : 0, stateless);
+        uint8_t const flags(nodes[i].stateless ? GCS_STATE_FSTATELESS : 0);
+        ck_assert(stateless == (flags != 0));
         nodes[i].status = GCS_NODE_STATE_SYNCED;
         nodes[i].state_msg = gcs_state_msg_create(
             &GU_UUID_NIL, &GU_UUID_NIL, &GU_UUID_NIL,
@@ -530,9 +821,12 @@ START_TEST(test_gcs_group_find_donor)
             GCS_NODE_STATE_SYNCED, GCS_NODE_STATE_SYNCED,
             "", "",
             0, 0, 0, 0, 0, 0,
-            0, 0);
+            0, flags);
     }
+    ck_assert(nodes[arbitr].stateless == a);
 
+    group.quorum.version = 3; // minimum quorum version for stateless flag
+                              // to have effect
     group.quorum.act_id = 0; // in safe range.
     ck_assert(group.quorum.gcs_proto_ver == -1);
     ck_assert(group.gcs_proto_ver == 0);
@@ -560,7 +854,10 @@ START_TEST(test_gcs_group_find_donor)
     // handle dangling comma.
     donor = gcs_group_find_donor(&group, sv, joiner, SARGS("home3,"),
                                  empty_gtid);
-    ck_assert(donor == 0);
+    int expect_donor(a ? 1 : arbitr);
+    ck_assert_msg(donor == expect_donor,
+                  "stateless: %d, expected donor: %d, result donor: %d",
+                  a, expect_donor, donor);
 
     // ========== ist ==========
     // by name.
@@ -590,8 +887,17 @@ START_TEST(test_gcs_group_find_donor)
     nodes[1].status = GCS_NODE_STATE_SYNCED;
     nodes[2].status = GCS_NODE_STATE_SYNCED;
 #undef SARGS
+}
 
-    gcs_group_free(&group);
+START_TEST(test_gcs_group_find_donor_stateful)
+{
+    test_gcs_group_find_donor(false);
+}
+END_TEST
+
+START_TEST(test_gcs_group_find_donor_stateless)
+{
+    test_gcs_group_find_donor(true);
 }
 END_TEST
 
@@ -606,7 +912,13 @@ Suite *gcs_group_suite(void)
     tcase_add_test  (tcase, gcs_group_last_applied_v0);
     tcase_add_test  (tcase, gcs_group_last_applied_v1);
     tcase_add_test  (tcase, gcs_group_last_applied_v2);
-    tcase_add_test  (tcase, test_gcs_group_find_donor);
+    tcase_add_test  (tcase, gcs_group_last_applied_v3);
+    tcase_add_test  (tcase, gcs_group_last_applied_v4);
+    tcase_add_test  (tcase, gcs_group_last_applied_v5);
+    tcase_add_test  (tcase, test_stateless_flag_false);
+    tcase_add_test  (tcase, test_stateless_flag_true);
+    tcase_add_test  (tcase, test_gcs_group_find_donor_stateful);
+    tcase_add_test  (tcase, test_gcs_group_find_donor_stateless);
 
     return suite;
 }

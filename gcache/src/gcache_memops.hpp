@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2017 Codership Oy <info@codership.com>
+ * Copyright (C) 2010-2024 Codership Oy <info@codership.com>
  */
 
 /*! @file memory operations interface */
@@ -7,6 +7,7 @@
 #ifndef _gcache_memops_hpp_
 #define _gcache_memops_hpp_
 
+#include "gcache_seqno.hpp"
 #include <gu_arch.h>
 #include <gu_macros.h>
 #include <gu_limits.h> // GU_MIN_ALIGNMENT
@@ -21,9 +22,10 @@ namespace gcache
     public:
         /* although size value passed to GCache should be representable by
          * a signed integer type, internally the buffer allocated will also
-         * incur header overhead, so it has to be represented by unsigned int.
-         * However the difference between two internal sizes should never exceed
-         * signed representation. */
+         * incur header overhead, so it has to be represented by unsigned
+         * int.
+         * However the difference between two internal sizes should never
+         * exceed signed representation. */
         typedef          int ssize_type; // size passed to GCache
         typedef unsigned int size_type;  // internal size representation
         typedef ssize_type   diff_type;  // difference between two size_types
@@ -48,6 +50,12 @@ namespace gcache
 
         virtual void
         reset   ()                        = 0;
+
+        virtual void
+        seqno_lock(seqno_t seqno_g)       = 0;
+
+        virtual void
+        seqno_unlock()                    = 0;
 
         /* GCache 3.x is not supposed to be portable between platforms */
         static size_type const ALIGNMENT  = GU_MIN_ALIGNMENT;

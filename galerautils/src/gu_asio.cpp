@@ -536,8 +536,7 @@ void gu::ssl_register_params(gu::Config& conf)
              gu::Config::Flag::read_only |
              gu::Config::Flag::type_bool);
     conf.add(gu::conf::ssl_cipher,
-             gu::Config::Flag::read_only |
-             gu::Config::Flag::type_bool);
+             gu::Config::Flag::read_only);
     conf.add(gu::conf::ssl_compression,
              gu::Config::Flag::read_only |
              gu::Config::Flag::type_bool |
@@ -748,9 +747,9 @@ void gu::AsioIoService::poll_one()
     impl_->native().poll_one();
 }
 
-void gu::AsioIoService::run()
+size_t gu::AsioIoService::run()
 {
-    impl_->native().run();
+    return impl_->native().run();
 }
 
 void gu::AsioIoService::post(std::function<void()> fun)
