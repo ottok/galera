@@ -123,15 +123,15 @@ test-crossbuild-armel:
 
 # Backports
 
+build trixie-backports:
+  extends: .build-package
+  variables:
+    RELEASE: trixie-backports
+
 build bookworm-backports:
   extends: .build-package
   variables:
     RELEASE: bookworm-backports
-
-build bullseye-backports:
-  extends: .build-package
-  variables:
-    RELEASE: bullseye-backports
 
 # Don't build buster-backports as the archive is closed by now
 # Define snippets used to construct jobs
@@ -189,6 +189,17 @@ build bullseye-backports:
   # Prime the apt cache so later apt commands can run
   apt-get update -q
 
+.test-enable-trixie-backports-repos: &test-enable-trixie-backports-repos |
+  # Enable trixie-backports (assumes environment already Debian Bullseye)
+  echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/trixie-backports.list
+  # Increase default backports priority policy from '100' to '500' so it can actually be used
+  cat << EOF > /etc/apt/preferences.d/enable-backports-to-satisfy-dependencies
+  Package: *
+  Pin: release n=bullseye-*
+  Pin-Priority: 500
+  EOF
+  apt-get update -q
+
 .test-enable-bookworm-backports-repos: &test-enable-bookworm-backports-repos |
   # Enable bookworm-backports (assumes environment already Debian Bookworm)
   sed 's/Suites: bookworm bookworm-updates/Suites: bookworm bookworm-updates bookworm-backports/' -i /etc/apt/sources.list.d/debian.sources
@@ -196,17 +207,6 @@ build bullseye-backports:
   cat << EOF > /etc/apt/preferences.d/enable-backports-to-satisfy-dependencies
   Package: *
   Pin: release n=bookworm-*
-  Pin-Priority: 500
-  EOF
-  apt-get update -q
-
-.test-enable-bullseye-backports-repos: &test-enable-bullseye-backports-repos |
-  # Enable bullseye-backports (assumes environment already Debian Bullseye)
-  echo 'deb http://deb.debian.org/debian bullseye-backports main' > /etc/apt/sources.list.d/bullseye-backports.list
-  # Increase default backports priority policy from '100' to '500' so it can actually be used
-  cat << EOF > /etc/apt/preferences.d/enable-backports-to-satisfy-dependencies
-  Package: *
-  Pin: release n=bullseye-*
   Pin-Priority: 500
   EOF
   apt-get update -q
@@ -504,6 +504,19 @@ galera-4 upgrade:
 
 # Galera-3 upgrade in Sid cannot be tested since it was removed in July 2024
 
+galera-4 with trixie-backports upgrade:
+  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
+  stage: upgrade package
+  needs:
+    - job: build trixie-backports
+  image: debian:trixie
+  # override steps to not enable sid
+  script:
+    - *test-prepare-container
+    - *test-install-all
+    - *test-enable-trixie-backports-repos
+    - *test-upgrade-all
+
 galera-4 with bookworm-backports upgrade:
   extends: .salsa-ci-template-for-package-and-distro-upgrade-test
   stage: upgrade package
@@ -515,19 +528,6 @@ galera-4 with bookworm-backports upgrade:
     - *test-prepare-container
     - *test-install-all
     - *test-enable-bookworm-backports-repos
-    - *test-upgrade-all
-
-galera-4 with bullseye-backports upgrade:
-  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
-  stage: upgrade package
-  needs:
-    - job: build bullseye-backports
-  image: debian:bullseye
-  # override steps to not enable sid
-  script:
-    - *test-prepare-container
-    - *test-install-all
-    - *test-enable-bullseye-backports-repos
     - *test-upgrade-all
 
 galera-4 and trixie upgrade:
