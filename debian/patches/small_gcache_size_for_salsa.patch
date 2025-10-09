@@ -9,7 +9,7 @@ Forwarded: https://github.com/codership/galera/issues/558#issuecomment-174146303
  1 file changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/galera/tests/defaults_check.cpp b/galera/tests/defaults_check.cpp
-index 40edfab..73d8c1a 100644
+index d087181..dc1ce1e 100644
 --- a/galera/tests/defaults_check.cpp
 +++ b/galera/tests/defaults_check.cpp
 @@ -60,9 +60,9 @@ static const char* Defaults[] =
@@ -22,9 +22,9 @@ index 40edfab..73d8c1a 100644
 -    "gcache.size",                 "128M",
 +    "gcache.size",                 "8M",
      "gcomm.thread_prio",           "",
+     "gcs.check_appl_proto",        "1",
      "gcs.fc_debug",                "0",
-     "gcs.fc_factor",               "1.0",
-@@ -250,7 +250,7 @@ START_TEST(defaults)
+@@ -251,7 +251,7 @@ START_TEST(defaults)
              NULL, // const char* node_address
              NULL, // const char* node_incoming
              NULL, // const char* data_dir
