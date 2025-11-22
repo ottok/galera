@@ -14,7 +14,6 @@ variables:
   SALSA_CI_ENABLE_BUILD_PACKAGE_PROFILES: 1
   BUILD_PROFILES: nocheck,nodoc
   # Enable more architectures
-  SALSA_CI_DISABLE_BUILD_PACKAGE_ARMEL: 0
   SALSA_CI_DISABLE_BUILD_PACKAGE_ARMHF: 0
   SALSA_CI_DISABLE_BUILD_PACKAGE_ARM64: 0
   # Enable cross-builds
@@ -93,13 +92,6 @@ build arm64:
   # disable until a shared ARM runner is available agian
   when: manual
 
-build armel:
-  extends: .build-package-armel
-  rules:
-    - if: $CI_PROJECT_ROOT_NAMESPACE  == "mariadb-team"
-  # disable until a shared ARM runner is available agian
-  when: manual
-
 build armhf:
   extends: .build-package-armhf
   rules:
@@ -119,13 +111,6 @@ test-crossbuild-armhf:
   extends: .test-crossbuild-package-arm64
   variables:
     HOST_ARCH: armhf
-
-# Custom cross-build architecture not in Salsa CI
-test-crossbuild-armel:
-  stage: build
-  extends: .test-crossbuild-package-arm64
-  variables:
-    HOST_ARCH: armel
 
 # Backports
 
