@@ -1,0 +1,41 @@
+From: =?utf-8?b?T3R0byBLZWvDpGzDpGluZW4=?= <otto@debian.org>
+Date: Wed, 14 Jan 2026 13:31:34 -0800
+Subject: When using system ASIO,
+ don't ship any extra ASIO license files in Galera
+
+This patch does not need to be submitted upstream as such, but the same
+change should eventually be done by upstream as part of
+https://jira.mariadb.org/browse/MDEV-36926
+
+Related: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1115369
+Forwarded: not-needed
+---
+ CMakeLists.txt | 3 ---
+ COPYING        | 3 ---
+ 2 files changed, 6 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9dea242..f2bc5c0 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -116,9 +116,6 @@ if (NOT ${CMAKE_SYSTEM_NAME} MATCHES ".*BSD")
+     ${PROJECT_SOURCE_DIR}/COPYING
+     ${PROJECT_SOURCE_DIR}/README
+     DESTINATION doc)
+-  install(FILES ${PROJECT_SOURCE_DIR}/asio/LICENSE_1_0.txt
+-    DESTINATION doc
+-    RENAME LICENSE.asio)
+ endif()
+ 
+ message(STATUS "")
+diff --git a/COPYING b/COPYING
+index 5c49709..47c34c3 100644
+--- a/COPYING
++++ b/COPYING
+@@ -29,6 +29,3 @@ Documentation is dual licensed with the Creative Commons Attribution ShareAlike
+ and GNU Free Documentation Licenses. See docs/COPYING for details.
+ 
+ Following modules have their own authors and licenses:
+-
+-asio/
+-see asio/LICENSE_1_0.txt for details

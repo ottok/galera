@@ -10,6 +10,7 @@ Build-Depends:
  debhelper-compat (= 13),
  check,
  cmake,
+ libasio-dev,
  libboost-dev,
  libboost-program-options-dev,
  libssl-dev,

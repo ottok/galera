@@ -1,6 +1,5 @@
 # Not relevant to ship in the package
 usr/doc/COPYING
-usr/doc/LICENSE.asio
 # These are included directly from the debian/* directory
 #   galera-arbitrator-4.garb.default -> ../garb/files/garb.cnf
 #   galera-arbitrator-4.garb.init -> ../garb/files/garb.sh*

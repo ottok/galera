@@ -21,5 +21,10 @@ override_dh_installinit-arch:
 override_dh_installsystemd:
 	dh_installsystemd --name=garb
 
+override_dh_auto_configure:
+	# Remove bundled asio to force use of system libasio-dev
+	rm -rf asio/
+	dh_auto_configure
+
 %:
 	dh $@

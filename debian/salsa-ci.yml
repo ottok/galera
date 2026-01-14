@@ -9,7 +9,8 @@ variables:
   SALSA_CI_DISABLE_RC_BUGS: 0
   # This will always fail as long as tests are superficial:
   #SALSA_CI_AUTOPKGTEST_ALLOWED_EXIT_STATUS: 0
-  SALSA_CI_DISABLE_BUILD_PACKAGE_TWICE: 0
+  # This will always fail as long as d/rules is deleting the embedded asio/ copy
+  #SALSA_CI_DISABLE_BUILD_PACKAGE_TWICE: 1
   SALSA_CI_ENABLE_ATOMIC_REPROTEST: 0
   SALSA_CI_ENABLE_BUILD_PACKAGE_PROFILES: 1
   BUILD_PROFILES: nocheck,nodoc
