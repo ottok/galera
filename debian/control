@@ -80,3 +80,26 @@ Description: Galera arbitrator daemon
  of Galera replication engine see http://galeracluster.com.
  .
  This package contains the Galera arbitrator daemon (garbd).
+
+Package: galera-test
+Architecture: any
+Depends:
+ check,
+ cmake,
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: Test suite for Galera
+ This package contains the test binaries for Galera, including unit tests
+ and integration tests for the various components.
+ .
+ The test suite includes:
+  - gu_tests: C-based unit tests for galerautils
+  - gu_tests++: C++ unit tests for galerautils
+  - check_gcomm: GComm communication layer tests
+  - gcache_tests: GCache buffer management tests
+  - gcs_tests: Group Communication System tests
+  - galera_check: High-level Galera integration tests
+  - wsrep_test: WSREP API interface tests
+ .
+ This package also includes CTest configuration files to run the tests
+ using ctest with the same output format as the build process.

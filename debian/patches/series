@@ -1,2 +1,3 @@
 rename-daemon-user.patch
 When-using-system-ASIO-don-t-ship-any-extra-ASIO-license-.patch
+include-test-binaries-in-final-build-artifacts.patch

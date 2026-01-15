@@ -5,3 +5,12 @@ Depends:
 Restrictions:
  allow-stderr,
  superficial,
+
+Tests:
+ upstream,
+Depends:
+ galera-4,
+ galera-arbitrator-4,
+ galera-test,
+Restrictions:
+ allow-stderr,

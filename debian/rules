@@ -26,5 +26,11 @@ override_dh_auto_configure:
 	rm -rf asio/
 	dh_auto_configure
 
+override_dh_auto_install:
+	dh_auto_install
+	# Install static CTestTestfile.cmake for ctest support
+	mkdir -p debian/tmp/usr/share/galera-test
+	cp debian/additions/CTestTestfile.cmake debian/tmp/usr/share/galera-test/
+
 %:
 	dh $@

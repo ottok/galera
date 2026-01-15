@@ -1,0 +1,190 @@
+From: =?utf-8?b?T3R0byBLZWvDpGzDpGluZW4=?= <otto@debian.org>
+Date: Wed, 14 Jan 2026 17:15:37 -0800
+Subject: Include test binaries in final build artifacts
+
+These test binaries have always been built and executed by CTest as part
+of the Galera build:
+
+- gu_tests
+- gu_tests++
+- check_gcomm
+- gcache_tests
+- gcs_tests
+- galera_check
+- wsrep_test
+
+Include them in the final build artifacts so that they can be run as
+standalone tests without original source directory as a method to test
+that the Galera binaries can easily be validated as operating correctly
+in that specific environment.
+
+Also modify the test certificate path and shared Galera library load path
+so that they can be read from environment variables instead of using
+hard-coded values set at compile-time.
+
+Related: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1053333
+Related: https://github.com/mariadb-corporation/galera/issues/646
+Forwarded: no
+---
+ CMakeLists.txt                     |  3 +++
+ galera/tests/CMakeLists.txt        |  3 +++
+ galerautils/tests/CMakeLists.txt   |  7 +++++++
+ galerautils/tests/gu_asio_test.cpp | 23 +++++++++++++++++++++++
+ gcache/tests/CMakeLists.txt        |  3 +++
+ gcomm/test/CMakeLists.txt          |  3 +++
+ gcs/src/unit_tests/CMakeLists.txt  |  3 +++
+ wsrep/tests/CMakeLists.txt         |  3 +++
+ wsrep/tests/wsrep_loader_test.c    |  9 +++++++++
+ 9 files changed, 57 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f2bc5c0..9e5bf2c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -99,6 +99,9 @@ include(cmake/coverage.cmake)
+ # in compiler warnings.
+ include(cmake/maintainer_mode.cmake)
+ 
++# Include GNUInstallDirs for standard installation directories
++include(GNUInstallDirs)
++
+ include(CTest)
+ enable_testing()
+ add_subdirectory(galerautils)
+diff --git a/galera/tests/CMakeLists.txt b/galera/tests/CMakeLists.txt
+index d18ecb2..ff2af34 100644
+--- a/galera/tests/CMakeLists.txt
++++ b/galera/tests/CMakeLists.txt
+@@ -35,3 +35,6 @@ add_test(
+   NAME galera_check
+   COMMAND galera_check
+   )
++
++# Install test binary
++install(TARGETS galera_check DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/galera-test)
+diff --git a/galerautils/tests/CMakeLists.txt b/galerautils/tests/CMakeLists.txt
+index a44b2d6..4ce4ad4 100644
+--- a/galerautils/tests/CMakeLists.txt
++++ b/galerautils/tests/CMakeLists.txt
+@@ -44,6 +44,9 @@ add_test(
+   COMMAND gu_tests
+   )
+ 
++# Install test binary
++install(TARGETS gu_tests DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/galera-test)
++
+ #
+ # C++ galerautils tests.
+ #
+@@ -92,6 +95,10 @@ add_test(
+   NAME gu_tests++
+   COMMAND gu_tests++
+   )
++
++# Install test binary
++install(TARGETS gu_tests++ DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/galera-test)
++
+ #
+ # Deqmap micro benchmark.
+ #
+diff --git a/galerautils/tests/gu_asio_test.cpp b/galerautils/tests/gu_asio_test.cpp
+index 66b3257..a3dbf66 100644
+--- a/galerautils/tests/gu_asio_test.cpp
++++ b/galerautils/tests/gu_asio_test.cpp
+@@ -1073,6 +1073,29 @@ END_TEST
+ 
+ static std::string get_cert_dir()
+ {
++    // To allow running test binaries from an out-of-source directory use the
++    // path in environment variable GALERA_TEST_CERT_DIR if set
++    const char* env_dir = std::getenv("GALERA_TEST_CERT_DIR");
++    if (env_dir && ::strlen(env_dir) > 0)
++    {
++        const std::string ret{ env_dir };
++        auto* dir = opendir(ret.c_str());
++        if (!dir)
++        {
++            if (mkdir(ret.c_str(), S_IRWXU))
++            {
++                const auto* errstr = ::strerror(errno);
++                gu_throw_fatal << "Could not create dir " << ret << ": " << errstr;
++            }
++        }
++        else
++        {
++            closedir(dir);
++        }
++        return ret;
++    }
++
++    // If no GALERA_TEST_CERT_DIR is set, just use the compile-time path
+     assert(::strlen(GU_ASIO_TEST_CERT_DIR) > 0);
+     const std::string ret{ GU_ASIO_TEST_CERT_DIR };
+     auto* dir = opendir(ret.c_str());
+diff --git a/gcache/tests/CMakeLists.txt b/gcache/tests/CMakeLists.txt
+index f61b771..b727cf1 100644
+--- a/gcache/tests/CMakeLists.txt
++++ b/gcache/tests/CMakeLists.txt
+@@ -23,3 +23,6 @@ add_test(
+   NAME gcache_tests
+   COMMAND gcache_tests
+   )
++
++# Install test binary
++install(TARGETS gcache_tests DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/galera-test)
+diff --git a/gcomm/test/CMakeLists.txt b/gcomm/test/CMakeLists.txt
+index 508b3be..228fdcc 100644
+--- a/gcomm/test/CMakeLists.txt
++++ b/gcomm/test/CMakeLists.txt
+@@ -32,6 +32,9 @@ add_test(
+   WORKING_DIRECTORY ${PROJECT_BINARY_DIR}/Testing
+   )
+ 
++# Install test binary
++install(TARGETS check_gcomm DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/galera-test)
++
+ #
+ # Nondeterministic unit tests, must be run manually.
+ #
+diff --git a/gcs/src/unit_tests/CMakeLists.txt b/gcs/src/unit_tests/CMakeLists.txt
+index 6f89b79..a20b967 100644
+--- a/gcs/src/unit_tests/CMakeLists.txt
++++ b/gcs/src/unit_tests/CMakeLists.txt
+@@ -68,3 +68,6 @@ add_test(
+   NAME gcs_tests
+   COMMAND gcs_tests
+   )
++
++# Install test binary
++install(TARGETS gcs_tests DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/galera-test)
+diff --git a/wsrep/tests/CMakeLists.txt b/wsrep/tests/CMakeLists.txt
+index 4dc9563..cb40326 100644
+--- a/wsrep/tests/CMakeLists.txt
++++ b/wsrep/tests/CMakeLists.txt
+@@ -19,3 +19,6 @@ target_compile_definitions(wsrep_test
+   -DGALERA_GIT_REVISION="${GALERA_GIT_REVISION}")
+ target_link_libraries(wsrep_test dl)
+ add_test(NAME wsrep_test COMMAND wsrep_test)
++
++# Install test binary
++install(TARGETS wsrep_test DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/galera-test)
+diff --git a/wsrep/tests/wsrep_loader_test.c b/wsrep/tests/wsrep_loader_test.c
+index 090108f..1d9312a 100644
+--- a/wsrep/tests/wsrep_loader_test.c
++++ b/wsrep/tests/wsrep_loader_test.c
+@@ -27,6 +27,15 @@ static void log_fn(wsrep_log_level_t level, const char* msg)
+ 
+ static const char* get_provider()
+ {
++    // To allow running test binaries from an out-of-source directory, load
++    // libgalera_smm.so from the path in environment variable
++    // GALERA_TEST_PROVIDER if set
++    const char* env_provider = getenv("GALERA_TEST_PROVIDER");
++    if (env_provider && strlen(env_provider) > 0)
++    {
++        return env_provider;
++    }
++    // Fall back to compile-time path
+     return WSREP_PROVIDER;
+ }
+ 

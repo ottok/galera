@@ -1,0 +1,8 @@
+usr/libexec/galera-test/check_gcomm
+usr/libexec/galera-test/galera_check
+usr/libexec/galera-test/gcache_tests
+usr/libexec/galera-test/gcs_tests
+usr/libexec/galera-test/gu_tests
+usr/libexec/galera-test/gu_tests++
+usr/libexec/galera-test/wsrep_test
+usr/share/galera-test/CTestTestfile.cmake

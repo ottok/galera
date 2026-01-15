@@ -1,0 +1,24 @@
+#!/bin/sh
+set -ex
+
+# Upstream test suite for Galera
+# Runs ctest to execute the test suite with the same output format as the build
+
+# Run ctest from a temporary, writable directory
+# Avoid DartConfiguration.tcl in the source tree (hardcoded CI paths).
+WORKDIR="$(mktemp -d)"
+CERTDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR" "$CERTDIR"' EXIT INT TERM
+
+# Certificate directory for tests that generate TLS material.
+export GALERA_TEST_CERT_DIR="$CERTDIR"
+
+# Set provider library path for wsrep_test
+export GALERA_TEST_PROVIDER="/usr/lib/libgalera_smm.so"
+
+# Copy the CTestTestfile.cmake from the installed location
+cp /usr/share/galera-test/CTestTestfile.cmake "$WORKDIR/"
+cd "$WORKDIR"
+
+# Run ctest with the same options as the build
+ctest --force-new-ctest-process --output-on-failure --no-tests=error
