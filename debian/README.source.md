@@ -20,7 +20,7 @@ it, simply run:
 Alternatively, run this to define precisely one upstream branch to be tracked:
 
     gbp clone vcs-git:galera-4 \
-      --postclone="git remote add -t 4.x -f upstreamvcs https://github.com/codership/galera.git"
+      --postclone="git remote add -t 4.x -f upstreamvcs https://github.com/mariadb/galera.git"
 
 Using the `vcs-git:`prefix will automatically resolve the git repository
 location, which for most packages is on salsa.debian.org. To build the package

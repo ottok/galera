@@ -1,4 +1,4 @@
-Bug-Database: https://github.com/codership/galera/issues
-Bug-Submit: https://github.com/codership/galera/issues/new
-Repository: https://github.com/codership/galera.git
-Repository-Browse: https://github.com/codership/galera
+Bug-Database: https://github.com/mariadb-corporation/galera/issues
+Bug-Submit: https://github.com/mariadb-corporation/galera/issues/new
+Repository: https://github.com/mariadb/galera.git
+Repository-Browse: https://github.com/mariadb/galera

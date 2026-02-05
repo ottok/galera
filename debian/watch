@@ -1,2 +1,7 @@
-version=4
-opts=pgpsigurlmangle=s/$/.asc/ https://releases.galeracluster.com/galera-4/source/ galera-4-(.+).tar.gz
+# The new download system has too many version numbers and random asset
+# identifiers that a watch file can't be constructed.
+#
+# The latest release was downloaded and verified from:
+# https://dlm.mariadb.com/4593680/mysql-wsrep/mysql-wsrep-8.4.7-26.25/galera-4.25/source/galera-4-26.4.25.tar.gz
+# https://dlm.mariadb.com/4593679/mysql-wsrep/mysql-wsrep-8.4.7-26.25/galera-4.25/source/galera-4-26.4.25.tar.gz.asc
+# and overlayed on top of https://github.com/MariaDB/galera/tree/release_26.4.25
