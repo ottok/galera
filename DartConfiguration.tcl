@@ -11,7 +11,7 @@ BuildDirectory: /var/lib/jenkins/workspace/aws-galera-4-sourcetar
 CostDataFile: 
 
 # Site is something like machine.domain, i.e. pragmatic.crd
-Site: ubuntu2204-static-fsn1-2
+Site: ubuntu2204-static-hel1
 
 # Build name is osname-revision-compiler, i.e. Linux-2.4.2-2smp-c++
 BuildName: Linux-c++
