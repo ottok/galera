@@ -537,51 +537,6 @@ galera-4 and bullseye upgrade:
   stage: upgrade package and distro
   image: debian:bullseye
 
-galera-3 and bullseye upgrade:
-  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
-  stage: upgrade package and distro
-  image: debian:bullseye
-  script:
-    - *test-prepare-container
-    - apt-get install -q --yes 'galera*-3'
-    - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
-    - *test-enable-sid-repos
-    # As the MariaDB server is not installed, nothing will force galera-3 to
-    # upgrade to galera-4 and thus it needs to be requested explicitly
-    - *test-enable-artifacts-repo
-    - apt-get install -q --yes ${BUILT_PACKAGES}
-    - *test-verify-final
-
-galera-3 and buster upgrade:
-  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
-  stage: upgrade package and distro
-  image: debian:buster
-  script:
-    - *test-prepare-container
-    - apt-get install -q --yes 'galera*-3'
-    - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
-    - *test-enable-sid-repos
-    # As the MariaDB server is not installed, nothing will force galera-3 to
-    # upgrade to galera-4 and thus it needs to be requested explicitly
-    - *test-enable-artifacts-repo
-    - apt-get install -q --yes ${BUILT_PACKAGES}
-    - *test-verify-final
-
-galera-3 and stretch upgrade:
-  extends: .salsa-ci-template-for-package-and-distro-upgrade-test
-  stage: upgrade package and distro
-  image: debian:stretch
-  script:
-    - *test-prepare-container
-    - apt-get install -q --yes 'galera*-3'
-    - dpkg -l | grep -iE 'maria|mysql|galera' || true  # List installed
-    - *test-enable-sid-repos
-    # As the MariaDB server is not installed, nothing will force galera-3 to
-    # upgrade to galera-4 and thus it needs to be requested explicitly
-    - *test-enable-artifacts-repo
-    - apt-get install -q --yes ${BUILT_PACKAGES}
-    - *test-verify-final
-
 mariadb upgrade:
   extends: .salsa-ci-template-for-combined-mariadb-galera-distro-upgrade-test
   # Already on sid, so despite template name won't upgrade the distro
