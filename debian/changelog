@@ -1,3 +1,11 @@
+galera-4 (26.4.25-2~exp1) experimental; urgency=medium
+
+  * Add upstream autopkgtest to run installed test binaries (Closes: #1053333),
+    and introduce new binary package 'galera-test'
+  * Salsa CI: Remove stretch/buster/bullseye upgrade jobs due to Boost 1.90
+
+ -- Otto Kekäläinen <otto@debian.org>  Thu, 05 Mar 2026 15:15:15 +0000
+
 galera-4 (26.4.25-1) unstable; urgency=medium
 
   * New upstream release 26.4.25. Includes multiple bug fixes, see
