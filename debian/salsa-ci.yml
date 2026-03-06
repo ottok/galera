@@ -17,8 +17,8 @@ variables:
   # Enable more architectures
   SALSA_CI_DISABLE_BUILD_PACKAGE_ARMHF: 0
   SALSA_CI_DISABLE_BUILD_PACKAGE_ARM64: 0
-  # Enable cross-builds
-  SALSA_CI_DISABLE_CROSSBUILD_ARM64: 0
+  # Disable cross-builds until Debian unstable works again
+  SALSA_CI_DISABLE_CROSSBUILD_ARM64: 1
 
 stages:
   - provisioning
