@@ -1,16 +1,13 @@
-galera-4 (26.4.25-2~exp2) experimental; urgency=medium
-
-  * Update machine readable copyright based on Debian DFSG NEW queue review
-
- -- Otto Kekäläinen <otto@debian.org>  Fri, 06 Mar 2026 13:13:13 +0000
-
-galera-4 (26.4.25-2~exp1) experimental; urgency=medium
+galera-4 (26.4.25-2) unstable; urgency=medium
 
   * Add upstream autopkgtest to run installed test binaries (Closes: #1053333),
     and introduce new binary package 'galera-test'
+  * Update machine readable copyright based on Debian DFSG NEW queue review
   * Salsa CI: Remove stretch/buster/bullseye upgrade jobs due to Boost 1.90
+  * Salsa CI: Disable cross-builds that can't be fixed in Galera
+  * Salsa CI: Disable debrebuild job that is failing on unrelated issues
 
- -- Otto Kekäläinen <otto@debian.org>  Thu, 05 Mar 2026 15:15:15 +0000
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 06 Mar 2026 12:12:12 +0000
 
 galera-4 (26.4.25-1) unstable; urgency=medium
 
