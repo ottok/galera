@@ -19,6 +19,9 @@ variables:
   SALSA_CI_DISABLE_BUILD_PACKAGE_ARM64: 0
   # Disable cross-builds until Debian unstable works again
   SALSA_CI_DISABLE_CROSSBUILD_ARM64: 1
+  # Disable debrebuild that fails on timestamp issues that are not a regression
+  # in the reproducibility of this package
+  SALSA_CI_DISABLE_DEBREBUILD: 1
 
 stages:
   - provisioning
