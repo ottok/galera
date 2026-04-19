@@ -81,8 +81,16 @@ packaging-fix-checks:
     # Print syntax errors if found, otherwise continue silently
     - make --dry-run --makefile=debian/rules > /dev/null
     - |
-      shellcheck -x --shell=sh $(grep -Irnw debian/ -e '^#!.*/sh' | sort -u |cut -d ':' -f 1 | xargs)
-      shellcheck -x --shell=bash $(grep -Irnw debian/ -e '^#!.*/bash' | sort -u |cut -d ':' -f 1 | xargs)
+      sh_files=$(grep -Irnw debian/ -e '^#!.*/sh' | sort -u | cut -d ':' -f 1 || true)
+      if [ -n "$sh_files" ]
+      then
+        shellcheck -x --shell=sh $sh_files
+      fi
+      bash_files=$(grep -Irnw debian/ -e '^#!.*/bash' | sort -u | cut -d ':' -f 1 || true)
+      if [ -n "$bash_files" ]
+      then
+        shellcheck -x --shell=bash $bash_files
+      fi
   except:
     variables:
       - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
