@@ -22,6 +22,10 @@ variables:
   # Disable debrebuild that fails on timestamp issues that are not a regression
   # in the reproducibility of this package
   SALSA_CI_DISABLE_DEBREBUILD: 1
+  # uscan currently fails due empty watch file as no automation can be written
+  # to detect the subpage of https://mariadb.com/docs/release-notes/galera-cluster/26.4
+  # (e.g. https://dlm.mariadb.com/browse/galera_cluster_mysql/8.4.8-26.26/galera-4.26/source/)
+  SALSA_CI_DISABLE_USCAN: 1
 
 stages:
   - provisioning
