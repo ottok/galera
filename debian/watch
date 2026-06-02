@@ -2,6 +2,15 @@
 # identifiers that a watch file can't be constructed.
 #
 # The latest release was downloaded and verified from:
-# https://dlm.mariadb.com/4593680/mysql-wsrep/mysql-wsrep-8.4.7-26.25/galera-4.25/source/galera-4-26.4.25.tar.gz
-# https://dlm.mariadb.com/4593679/mysql-wsrep/mysql-wsrep-8.4.7-26.25/galera-4.25/source/galera-4-26.4.25.tar.gz.asc
-# and overlaid on top of https://github.com/MariaDB/galera/tree/release_26.4.25
+# https://dlm.mariadb.com/browse/galera_cluster_mysql/8.0.46-26.27/galera-4.27/source/
+# ->
+# https://dlm.mariadb.com/4786688/mysql-wsrep/mysql-wsrep-8.0.46-26.27/galera-4.27/source/galera-4-26.4.27.tar.gz
+# https://dlm.mariadb.com/4786687/mysql-wsrep/mysql-wsrep-8.0.46-26.27/galera-4.27/source/galera-4-26.4.27.tar.gz.asc
+# and overlayed on top of https://github.com/mariadb-corporation/galera/tree/release_26.4.27
+#
+# See also:
+# - release_* tags at https://github.com/mariadb-corporation/galera/tags
+# - release notes at https://mariadb.com/docs/release-notes/galera-cluster/26.4
+# - download links via https://mariadb.com/galera-downloads/ -> "Show All Files"
+# - mariadb-* tags at https://github.com/MariaDB/galera/tags don't represent the
+#   historical Galera release series
