@@ -1,3 +1,19 @@
+galera-4 (26.4.25-3) unstable; urgency=medium
+
+  [ Luca Boccassi ]
+  * Install and use sysusers.d config file
+  * Salsa CI: Make shellcheck robust against empty file lists
+
+  [ Otto Kekäläinen ]
+  * Port ASIO usage to ASIO 1.33+ API (Closes: #1139668)
+  * Salsa CI: Disable new uscan test that is not suitable for Galera
+  * Drop redundant `Priority: optional`
+  * Drop redundant `Rules-Requires-Root: no`
+  * Bump Debian Policy version to 4.7.4
+  * Fix spelling
+
+ -- Otto Kekäläinen <otto@debian.org>  Thu, 11 Jun 2026 08:08:08 +0000
+
 galera-4 (26.4.25-2) unstable; urgency=medium
 
   * Add upstream autopkgtest to run installed test binaries (Closes: #1053333),
