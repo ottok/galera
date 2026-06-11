@@ -105,14 +105,14 @@ build arm64:
   extends: .build-package-arm64
   rules:
     - if: $CI_PROJECT_ROOT_NAMESPACE  == "mariadb-team"
-  # disable until a shared ARM runner is available agian
+  # disable until a shared ARM runner is available again
   when: manual
 
 build armhf:
   extends: .build-package-armhf
   rules:
     - if: $CI_PROJECT_ROOT_NAMESPACE  == "mariadb-team"
-  # disable until a shared ARM runner is available agian
+  # disable until a shared ARM runner is available again
   when: manual
 
 # Cross-builds
@@ -427,7 +427,7 @@ build bookworm-backports:
   - dpkg -l | grep -iE 'maria|mysql|galera' || true
   - >
     dpkg -l | grep galera | grep salsaci || {
-      echo "ERROR! Galera was not upgraded as expexted to CI version"
+      echo "ERROR! Galera was not upgraded as expected to CI version"
       exit 1
     }
 
