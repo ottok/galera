@@ -15,15 +15,15 @@ Forwarded: not-needed
  2 files changed, 6 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 9dea242..f2bc5c0 100644
+index 82c0b9f..43b15f9 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -116,9 +116,6 @@ if (NOT ${CMAKE_SYSTEM_NAME} MATCHES ".*BSD")
+@@ -120,9 +120,6 @@ if (NOT ${CMAKE_SYSTEM_NAME} MATCHES ".*BSD")
      ${PROJECT_SOURCE_DIR}/COPYING
-     ${PROJECT_SOURCE_DIR}/README
-     DESTINATION doc)
+     ${PROJECT_SOURCE_DIR}/scripts/packages/README-MySQL
+     DESTINATION ${INSTALL_DOCDIR})
 -  install(FILES ${PROJECT_SOURCE_DIR}/asio/LICENSE_1_0.txt
--    DESTINATION doc
+-    DESTINATION ${INSTALL_DOCDIR}
 -    RENAME LICENSE.asio)
  endif()
  

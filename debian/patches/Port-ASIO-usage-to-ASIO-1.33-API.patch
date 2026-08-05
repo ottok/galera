@@ -31,7 +31,7 @@ Forwarded: https://github.com/mariadb-corporation/galera/pull/691
  7 files changed, 58 insertions(+), 20 deletions(-)
 
 diff --git a/galerautils/src/gu_asio.cpp b/galerautils/src/gu_asio.cpp
-index 67f5dd0..b1d78bf 100644
+index 9cd8e90..abff736 100644
 --- a/galerautils/src/gu_asio.cpp
 +++ b/galerautils/src/gu_asio.cpp
 @@ -33,6 +33,9 @@
@@ -44,7 +44,7 @@ index 67f5dd0..b1d78bf 100644
  
  #ifdef GALERA_HAVE_SSL
  #include "asio/ssl.hpp"
-@@ -754,7 +757,11 @@ size_t gu::AsioIoService::run()
+@@ -760,7 +763,11 @@ size_t gu::AsioIoService::run()
  
  void gu::AsioIoService::post(std::function<void()> fun)
  {
@@ -56,7 +56,7 @@ index 67f5dd0..b1d78bf 100644
  }
  
  void gu::AsioIoService::stop()
-@@ -764,7 +771,11 @@ void gu::AsioIoService::stop()
+@@ -770,7 +777,11 @@ void gu::AsioIoService::stop()
  
  void gu::AsioIoService::reset()
  {
@@ -68,7 +68,7 @@ index 67f5dd0..b1d78bf 100644
  }
  
  gu::AsioIoService::Impl& gu::AsioIoService::impl()
-@@ -846,7 +857,11 @@ gu::AsioSteadyTimer::~AsioSteadyTimer()
+@@ -852,7 +863,11 @@ gu::AsioSteadyTimer::~AsioSteadyTimer()
  void gu::AsioSteadyTimer::expires_from_now(
      const AsioClock::duration& duration)
  {

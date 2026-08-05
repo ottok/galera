@@ -38,7 +38,7 @@ Forwarded: no
  9 files changed, 57 insertions(+)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index f2bc5c0..9e5bf2c 100644
+index 43b15f9..0c6084e 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -99,6 +99,9 @@ include(cmake/coverage.cmake)
@@ -63,7 +63,7 @@ index d18ecb2..ff2af34 100644
 +# Install test binary
 +install(TARGETS galera_check DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/galera-test)
 diff --git a/galerautils/tests/CMakeLists.txt b/galerautils/tests/CMakeLists.txt
-index a44b2d6..4ce4ad4 100644
+index d8d9985..87e3fbc 100644
 --- a/galerautils/tests/CMakeLists.txt
 +++ b/galerautils/tests/CMakeLists.txt
 @@ -44,6 +44,9 @@ add_test(
