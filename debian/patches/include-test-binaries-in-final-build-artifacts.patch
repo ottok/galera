@@ -24,7 +24,7 @@ hard-coded values set at compile-time.
 
 Related: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1053333
 Related: https://github.com/mariadb-corporation/galera/issues/646
-Forwarded: no
+Forwarded: https://github.com/mariadb-corporation/galera/pull/695
 ---
  CMakeLists.txt                     |  3 +++
  galera/tests/CMakeLists.txt        |  3 +++
